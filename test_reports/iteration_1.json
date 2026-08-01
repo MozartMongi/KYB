@@ -1,0 +1,39 @@
+{
+  "summary": "Full backend + frontend testing of CorpScore KYB. Backend pytest: 15/16 passed (1 pytest-xdist test-scoping artifact, not a real bug). Frontend Playwright: owner login, applicant register, 4-step onboarding wizard, submit with screening + AI scoring, HIGH risk with 3 screening hits (Ali Rahman SANCTION + Budi Hartono Santoso PEP + self-declared PEP), applicant RBAC (no approve button), owner reject flow, logout, and Google button redirect all working end-to-end.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A (test infra)", "issue": "test_stats_applicant_scope fails under pytest-xdist parallel workers because module-scoped `applicant` fixture is re-instantiated on each worker; the applicant that ran TestDashboard didn't create apps. Backend behavior is correct — merely a test-design issue with xdist LoadScopeScheduling. Fix: move fixture to session scope or run without -n auto."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Onboarding Wizard Step 4", "issues": ["Document upload label wraps testid `upload-Lainnya` and passes the localized Indonesian type as doc_type — works but coupling display text to identifier is fragile; consider a value/label pair."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Change `applicant` fixture scope from module to session, or set pytest-xdist dist=loadfile, so test_stats_applicant_scope passes under parallel run.",
+    "(Nit) Consider decoupling doc_type identifier from Indonesian display label in NewApplication Step 4."
+  ],
+  "critical_code_review_comments": [
+    "server.py `screen_watchlist` includes self-declared PEP but also duplicates when a watchlist PEP match exists on the same person — dedupe key is (matched_name, list) so both records (Self-declared PEP + Domestic PEP list) coexist; acceptable but produces the appearance of two PEP hits for one person.",
+    "compute_rule_score computes screening = 100 - 60*sanctions - 25*adverse - 15*peps: with only 1 SANCTION + 2 PEP hits this yields 100-60-30=10 which correctly drives HIGH; no issue but no floor per hit-type documented.",
+    "AI gpt-5.4 model string is unusual — main agent confirmed working; keep as-is.",
+    "set_auth_cookie uses samesite=none + secure=true which is required for cross-site cookie in preview; frontend also uses withCredentials + Bearer token from response body as fallback, both work.",
+    "download_document endpoint accepts `authorization`/`auth` params but does not actually validate user access — anyone with app_id+doc_id can download. Consider requiring auth and checking ownership/officer role."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "94% (15/16)", "frontend": "100% (all critical flows)"},
+  "test_credentials": "Owner: rizkyjo@pegasusexchange.id / Pegasus2026! (seeded, verified). Applicants registered ad-hoc via /api/auth/register.",
+  "seed_data_creation": "Test applications created under registered test user with TEST_ prefix; not cleaned up (data volume negligible).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "backend_test.py exists with 16 tests covering auth, applications CRUD, screening (Ali Rahman SANCTION + Budi Hartono Santoso PEP), scoring, RBAC (applicant 403 on decision + cross-user), owner approve/reject, dashboard stats. Only the applicant-scope dashboard test is flaky under xdist. Frontend flows verified via Playwright including Detail page (score_gauge, risk_badge, screening-hit-*, approve/reject/decision-note testids). Google OAuth not automatable — only redirect URL verified. Document AI extraction only runs for image mimetypes; not exercised in E2E.",
+  "rca of the issue": "test_stats_applicant_scope failure RCA: pytest-xdist LoadScopeScheduling assigns TestDashboard to worker gw1 while TestApplication (which populates apps via the same-named `applicant` fixture) ran on gw0. Because the fixture is scope=module, each worker gets its own fresh applicant with 0 apps → assertion total>=2 fails on gw1. Mitigation: run `pytest --dist loadfile` or `pytest -p no:xdist`, or change fixture to session scope with shared state. Backend endpoint /api/dashboard/stats itself is correct."
+}
