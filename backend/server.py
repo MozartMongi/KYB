@@ -442,10 +442,23 @@ async def upload_document(app_id: str, doc_type: str = Form(...), file: UploadFi
     return doc
 
 @api_router.get("/applications/{app_id}/documents/{doc_id}/download")
-async def download_document(app_id: str, doc_id: str, authorization: str = Header(None), auth: str = Query(None)):
+async def download_document(app_id: str, doc_id: str, request: Request, auth: str = Query(None)):
+    user = await resolve_user(request)
+    if not user and auth:
+        try:
+            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            user = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0})
+        except jwt.PyJWTError:
+            sess = await db.user_sessions.find_one({"session_token": auth})
+            if sess:
+                user = await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     a = await db.applications.find_one({"id": app_id}, {"_id": 0})
     if not a:
         raise HTTPException(status_code=404, detail="Not found")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
     doc = next((d for d in a.get("documents", []) if d["doc_id"] == doc_id), None)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
