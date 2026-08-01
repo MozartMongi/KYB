@@ -63,3 +63,10 @@ Build a KYB (Know Your Business) tool for crypto exchange corporate/priority cus
 2. Console → Workflows → create a KYB workflow → copy workflow_id (UUID).
 3. Console → API & Webhooks → Add destination, URL = `{REACT_APP_BACKEND_URL}/api/didit/webhook`, subscribe `status.updated`, copy secret_shared_key.
 4. Set in backend/.env: DIDIT_API_KEY, DIDIT_WORKFLOW_ID, DIDIT_WEBHOOK_SECRET → `sudo supervisorctl restart backend`.
+
+## Audit Trail + Per-UBO KYC + Branded PDF (2026-08-01)
+- **Audit trail webhook**: append-only `db.didit_events` records EVERY inbound Didit webhook (event_id, app_id, vendor_data, status, verified flag, received_at); `GET /api/applications/{id}/didit/events`. Shown as "Audit Trail Webhook" list in the Didit card.
+- **Per-UBO Didit KYC**: `POST /api/applications/{id}/directors/{index}/didit-session` (vendor_data `{id}:dir:{index}`, uses DIDIT_KYC_WORKFLOW_ID). Webhook branch updates `application.director_kyc[idx].status` without changing the app decision. Frontend: per-director "Verifikasi KYC" button + status badge.
+- **Branded PDF**: report.pdf now has a dark CorpScore letterhead (kop) with wordmark + accent + "RAHASIA/CONFIDENTIAL" and footer with page number.
+- Tested: iteration_6.json 47/47 pass (20 new + 27 regression). Visually verified PDF letterhead.
+- New env: DIDIT_KYC_WORKFLOW_ID (optional; falls back to DIDIT_WORKFLOW_ID for person KYC).
