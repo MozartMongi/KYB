@@ -6,7 +6,7 @@ import { RiskBadge, StatusBadge, ScoreGauge, FactorBar } from "@/components/kyb"
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Sparkles, CheckCircle2, XCircle, Building2, Users, FileText, BadgeCheck, CalendarClock, Ban } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Sparkles, CheckCircle2, XCircle, Building2, Users, FileText, BadgeCheck, CalendarClock, Ban, ShieldCheck, ExternalLink, RefreshCw } from "lucide-react";
 
 export default function ApplicationDetail() {
   const { id } = useParams();
@@ -135,6 +135,28 @@ export default function ApplicationDetail() {
             </div>
           )}
 
+          {/* Didit KYC/KYB verification */}
+          <div className="bg-white border border-gray-200 rounded-sm p-6" data-testid="didit-card">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <h2 className="font-head font-bold flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-indigo-600" /> Verifikasi Didit (KYC/KYB)</h2>
+              <div className="flex gap-2">
+                <Button data-testid="didit-create-button" onClick={createDidit} disabled={busy} className="rounded-sm bg-indigo-600 hover:bg-indigo-700 gap-2 h-8 text-xs"><ExternalLink className="w-3.5 h-3.5" /> Mulai Verifikasi</Button>
+                {diditState?.session_id && <Button data-testid="didit-refresh-button" onClick={refreshDidit} disabled={busy} variant="outline" className="rounded-sm gap-2 h-8 text-xs"><RefreshCw className="w-3.5 h-3.5" /> Perbarui Status</Button>}
+              </div>
+            </div>
+            {diditState?.session_id ? (
+              <div className="text-sm space-y-1">
+                <div>Status sesi: <b className="font-mono">{diditState.status || "Not Started"}</b> {diditState.session_kind && <span className="text-gray-400">· {diditState.session_kind}</span>}</div>
+                {diditState.registry_status && <div>Registry: <span className="font-mono">{diditState.registry_status}</span> · {diditState.company_name}</div>}
+                {diditState.risk_level && <div>Risk Didit: <span className="font-mono">{diditState.risk_level}</span></div>}
+                {typeof diditState.aml_total_hits === "number" && <div>AML hits: <span className="font-mono">{diditState.aml_total_hits}</span></div>}
+                {diditState.url && <a href={diditState.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline inline-flex items-center gap-1 text-xs">Buka halaman verifikasi <ExternalLink className="w-3 h-3" /></a>}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">Buat sesi hosted Didit untuk verifikasi identitas/perusahaan (registry, UBO, AML) via 220+ negara. Butuh konfigurasi DIDIT_API_KEY & workflow KYB.</p>
+            )}
+          </div>
+
           {/* AI review */}
           {ai && (
             <div className="bg-white border border-gray-200 rounded-sm p-6">
@@ -223,6 +245,30 @@ export default function ApplicationDetail() {
               <div className="flex gap-3">
                 <Button data-testid="approve-button" onClick={() => decide("approved")} disabled={busy} className="rounded-sm bg-emerald-600 hover:bg-emerald-700 gap-2"><CheckCircle2 className="w-4 h-4" /> Setujui</Button>
                 <Button data-testid="reject-button" onClick={() => decide("rejected")} disabled={busy} variant="outline" className="rounded-sm border-red-300 text-red-700 hover:bg-red-50 gap-2"><XCircle className="w-4 h-4" /> Tolak</Button>
+              </div>
+            </div>
+          )}
+
+          {a.decision && a.status !== "auto_rejected" && (
+            <div className={`rounded-sm p-4 text-sm border ${a.decision === "approved" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-800"}`}>
+              Diputuskan <b>{a.decision === "approved" ? "DISETUJUI" : "DITOLAK"}</b> oleh {a.decided_by}. {a.decision_note && `— "${a.decision_note}"`}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Info({ label, value, mono }) {
+  return (
+    <div>
+      <div className="text-xs text-gray-400 uppercase tracking-wider">{label}</div>
+      <div className={`text-gray-900 ${mono ? "font-mono" : ""}`}>{value || "—"}</div>
+    </div>
+  );
+}
+-testid="reject-button" onClick={() => decide("rejected")} disabled={busy} variant="outline" className="rounded-sm border-red-300 text-red-700 hover:bg-red-50 gap-2"><XCircle className="w-4 h-4" /> Tolak</Button>
               </div>
             </div>
           )}

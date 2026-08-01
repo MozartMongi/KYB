@@ -236,6 +236,7 @@ def nib_registry_lookup(nib: str) -> dict:
 def decode_nib_qr(image_bytes: bytes, expected_nib: str = "") -> dict:
     try:
         import re
+        from urllib.parse import urlparse
         import cv2
         import numpy as np
         arr = np.frombuffer(image_bytes, np.uint8)
@@ -246,7 +247,8 @@ def decode_nib_qr(image_bytes: bytes, expected_nib: str = "") -> dict:
         data, points, _ = detector.detectAndDecode(img)
         if not data:
             return {"success": False, "reason": "QR code tidak terdeteksi pada dokumen"}
-        domain_valid = "oss.go.id" in data.lower()
+        host = (urlparse(data).hostname or "").lower()
+        domain_valid = host == "oss.go.id" or host.endswith(".oss.go.id")
         m = re.search(r"\d{13}", data)
         nib_in_qr = m.group(0) if m else ""
         matches = (not expected_nib) or (nib_in_qr and _clean_nib(expected_nib) == nib_in_qr)
@@ -376,7 +378,7 @@ def verify_bank(company: dict) -> dict:
         resolved = holder
         result["note"] = "BRIAPI belum dikonfigurasi — verifikasi simulasi"
     result["resolved_name"] = resolved
-    sim = max(_name_similarity(resolved, legal), _name_similarity(resolved, brand), _name_similarity(resolved, holder))
+    sim = max(_name_similarity(resolved, legal), _name_similarity(resolved, brand))
     result["name_match_score"] = round(sim * 100)
     if sim >= 0.5:
         result["verified"] = True
@@ -387,6 +389,49 @@ def verify_bank(company: dict) -> dict:
         result["status"] = "mismatch"
         result["note"] = (result["note"] + " · " if result["note"] else "") + "Nama pemilik rekening tidak cocok dengan perusahaan"
     return result
+
+# ---------------- Didit KYC/KYB (hosted sessions) ----------------
+def didit_create_session(app: dict) -> dict:
+    api_key = os.environ.get("DIDIT_API_KEY")
+    workflow_id = os.environ.get("DIDIT_WORKFLOW_ID")
+    base = os.environ.get("DIDIT_BASE_URL", "https://verification.didit.me")
+    if not (api_key and workflow_id):
+        return {"configured": False}
+    company = app.get("company", {})
+    payload = {
+        "workflow_id": workflow_id,
+        "vendor_data": app["id"],
+        "callback": f"{FRONTEND_URL}/applications/{app['id']}",
+        "metadata": {"legal_name": company.get("legal_name", ""), "nib": company.get("nib", "")},
+        "language": "id",
+        "expected_details": {"company_name": company.get("legal_name", ""), "registry_country": "ID", "registration_number": company.get("nib", "")},
+    }
+    try:
+        r = requests.post(f"{base}/v3/session/", json=payload, headers={"x-api-key": api_key, "Content-Type": "application/json"}, timeout=25)
+        r.raise_for_status()
+        d = r.json()
+        return {"configured": True, "session_id": d.get("session_id"), "url": d.get("url"), "status": d.get("status"), "session_kind": d.get("session_kind")}
+    except Exception as e:
+        logger.error(f"Didit create session failed: {e}")
+        return {"configured": True, "error": str(e)}
+
+def didit_get_decision(session_id: str) -> dict:
+    api_key = os.environ.get("DIDIT_API_KEY")
+    base = os.environ.get("DIDIT_BASE_URL", "https://verification.didit.me")
+    if not api_key:
+        return {"configured": False}
+    try:
+        r = requests.get(f"{base}/v3/session/{session_id}/decision/", headers={"x-api-key": api_key, "Accept": "application/json"}, timeout=25)
+        r.raise_for_status()
+        d = r.json()
+        reg = (d.get("registry_checks") or [{}])[0].get("company", {}) if d.get("registry_checks") else {}
+        aml = d.get("aml_screenings") or []
+        return {"configured": True, "session_id": session_id, "session_kind": d.get("session_kind"), "status": d.get("status"),
+                "registry_status": reg.get("registry_status"), "company_name": reg.get("company_name"),
+                "risk_level": reg.get("risk_level"), "aml_total_hits": sum((a.get("total_hits") or 0) for a in aml)}
+    except Exception as e:
+        logger.error(f"Didit decision failed: {e}")
+        return {"configured": True, "error": str(e)}
 
 def screen_watchlist(company: dict):
     hits = []
@@ -667,6 +712,32 @@ async def download_document(app_id: str, doc_id: str, request: Request, auth: st
         raise HTTPException(status_code=404, detail="Document not found")
     content, ctype = get_object(doc["storage_path"])
     return Response(content=content, media_type=doc.get("content_type", ctype))
+
+@api_router.post("/applications/{app_id}/didit/session")
+async def didit_session_endpoint(app_id: str, user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    res = didit_create_session(a)
+    if res.get("session_id"):
+        await db.applications.update_one({"id": app_id}, {"$set": {"didit": res, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return res
+
+@api_router.get("/applications/{app_id}/didit/decision")
+async def didit_decision_endpoint(app_id: str, user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    sid = (a.get("didit") or {}).get("session_id")
+    if not sid:
+        raise HTTPException(status_code=400, detail="Sesi Didit belum dibuat")
+    res = didit_get_decision(sid)
+    await db.applications.update_one({"id": app_id}, {"$set": {"didit": {**(a.get("didit") or {}), **res}, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return res
 
 @api_router.post("/applications/{app_id}/verify-nib")
 async def verify_nib_endpoint(app_id: str, file: UploadFile = File(None), user: dict = Depends(get_current_user)):
