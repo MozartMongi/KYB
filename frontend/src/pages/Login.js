@@ -105,7 +105,7 @@ export default function Login() {
           </div>
 
           <Button data-testid="google-login-button" variant="outline" onClick={googleLogin} className="w-full rounded-sm gap-2 border-gray-300">
-            <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="" className="w-4 h-4" />
+            <img src="https://www.svgrepo.com/show/452213/gmail.svg" alt="Gmail" className="w-4 h-4" />
             Lanjut dengan Google
           </Button>
 

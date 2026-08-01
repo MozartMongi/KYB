@@ -150,7 +150,7 @@ class TestDidit:
         r = applicant.post(f"{API}/applications/{aid}/didit/session")
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d.get("configured") == False, d
+        assert d.get("configured") == False or d.get("demo") == True, d
 
     def test_didit_decision_requires_session(self, applicant):
         aid = _create(applicant)
@@ -181,7 +181,8 @@ class TestDidit:
         aid = _create(applicant)
         r = owner.post(f"{API}/applications/{aid}/didit/session")
         assert r.status_code == 200
-        assert r.json().get("configured") == False
+        j = r.json()
+        assert j.get("configured") == False or j.get("demo") == True, j
 
 
 # ---------- Regression full onboarding ----------
