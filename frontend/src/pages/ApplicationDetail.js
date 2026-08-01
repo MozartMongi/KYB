@@ -16,9 +16,19 @@ export default function ApplicationDetail() {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [diditState, setDiditState] = useState(null);
+  const [dirKyc, setDirKyc] = useState({});
+  const [events, setEvents] = useState([]);
   const isOfficer = user?.role === "owner" || user?.role === "officer";
 
-  const load = () => api.get(`/applications/${id}`).then((r) => { setA(r.data); setDiditState(r.data.didit || null); }).catch(() => toast.error("Gagal memuat"));
+  const load = async () => {
+    try {
+      const { data } = await api.get(`/applications/${id}`);
+      setA(data);
+      setDiditState(data.didit || null);
+      setDirKyc(data.director_kyc || {});
+      try { const ev = await api.get(`/applications/${id}/didit/events`); setEvents(ev.data || []); } catch {}
+    } catch { toast.error("Gagal memuat"); }
+  };
   useEffect(() => { load(); }, [id]);
 
   const createDidit = async () => {
@@ -53,6 +63,19 @@ export default function ApplicationDetail() {
       await api.post(`/applications/${id}/decision`, { decision, note });
       toast.success(decision === "approved" ? "Aplikasi disetujui" : "Aplikasi ditolak");
       load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
+  const createDirectorKyc = async (i) => {
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/applications/${id}/directors/${i}/didit-session`);
+      if (data.configured === false) { toast.message("Didit belum dikonfigurasi (API key kosong)"); return; }
+      if (data.error) { toast.error("Gagal membuat sesi KYC"); return; }
+      setDirKyc((s) => ({ ...s, [i]: { session_id: data.session_id, url: data.url, status: data.status || "Not Started" } }));
+      if (data.url) window.open(data.url, "_blank");
+      toast.success("Sesi KYC direktur dibuat");
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setBusy(false); }
   };
@@ -198,6 +221,19 @@ export default function ApplicationDetail() {
             ) : (
               <p className="text-sm text-gray-500">Buat sesi hosted Didit untuk verifikasi identitas/perusahaan (registry, UBO, AML) via 220+ negara. Butuh konfigurasi DIDIT_API_KEY & workflow KYB.</p>
             )}
+            {events.length > 0 && (
+              <div className="mt-4 border-t border-gray-200 pt-3" data-testid="didit-events">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Audit Trail Webhook ({events.length})</div>
+                <div className="space-y-1 max-h-40 overflow-auto">
+                  {events.map((e, i) => (
+                    <div key={i} className="text-xs font-mono flex justify-between gap-2 text-gray-600">
+                      <span>{e.webhook_type} · {e.status}{e.vendor_data?.includes(":dir:") ? " · UBO" : ""}</span>
+                      <span className="text-gray-400">{(e.received_at || "").slice(0, 19).replace("T", " ")} {e.verified ? "✓" : "⚠"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* AI review */}
@@ -257,11 +293,14 @@ export default function ApplicationDetail() {
           <div className="bg-white border border-gray-200 rounded-sm p-6">
             <h2 className="font-head font-bold flex items-center gap-2 mb-4"><Users className="w-4 h-4 text-gray-600" /> Direksi & Beneficial Owner</h2>
             <div className="space-y-2">{(co.directors || []).map((d, i) => (
-              <div key={i} className="flex items-center justify-between text-sm border-b border-gray-100 pb-2">
+              <div key={i} className="flex items-center justify-between text-sm border-b border-gray-100 pb-2 gap-3 flex-wrap">
                 <div><span className="font-medium">{d.name}</span> <span className="text-gray-400">· {d.role}</span></div>
-                <div className="flex items-center gap-3 font-mono text-xs">
+                <div className="flex items-center gap-2 font-mono text-xs">
                   <span>{d.ownership_pct}%</span>
                   {d.is_pep && <span className="px-2 py-0.5 rounded-sm bg-amber-50 text-amber-700 border border-amber-200">PEP</span>}
+                  {dirKyc[i]?.status && <span className="px-2 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 border border-indigo-200" data-testid={`director-kyc-status-${i}`}>KYC: {dirKyc[i].status}</span>}
+                  {dirKyc[i]?.url && <a href={dirKyc[i].url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline inline-flex items-center gap-1">link <ExternalLink className="w-3 h-3" /></a>}
+                  <Button data-testid={`director-kyc-${i}`} onClick={() => createDirectorKyc(i)} disabled={busy} variant="outline" className="rounded-sm h-7 text-xs gap-1 font-sans"><ShieldCheck className="w-3 h-3" /> Verifikasi KYC</Button>
                 </div>
               </div>))}
             </div>

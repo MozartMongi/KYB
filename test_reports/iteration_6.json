@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 6: tested the 3 new features (audit trail webhook events, per-UBO Didit KYC session + webhook branch, branded PDF) plus regressions. Created /app/backend/tests/test_iter6_audit_and_ubo.py with 20 tests — ALL 20 PASS. Prior suites still pass (27/27 in test_pdf_and_webhook.py + test_didit_and_regressions.py). Frontend Playwright end-to-end: registered applicant, created app with 2 directors, fired UBO webhook (dir:0 Approved), logged in via UI, opened application detail — verified: director-kyc-0/1 buttons render, KYC:Approved badge on Alice, 'Audit Trail Webhook (1)' list shows status.updated · Approved · UBO with received_at timestamp, clicking Verifikasi KYC triggers toast 'Didit belum dikonfigurasi (API key kosong)'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter6_audit_and_ubo.py",
+    "/app/test_reports/pytest/iter6.xml",
+    "/app/backend/tests/test_pdf_and_webhook.py",
+    "/app/backend/tests/test_didit_and_regressions.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "didit_webhook now inserts EVERY inbound event into db.didit_events BEFORE signature check — good for audit fidelity. verified flag captures signature state per-event. Consider TTL/index on (app_id, received_at) if volume grows; currently list capped at 200 via to_list(200).",
+    "Per-UBO branch (':dir:' in vendor_data) correctly updates only director_kyc[idx] and does NOT touch app.status/decision. Guard for finalized app on app-level branch remains intact.",
+    "director_kyc_session uses DIDIT_KYC_WORKFLOW_ID fallback (separate from app-level DIDIT_WORKFLOW_ID) — clean separation for KYC vs KYB flow templates.",
+    "vendor_data parsing uses str.split(':dir:') so an app id that itself contains ':dir:' would collide. Application IDs are generated 'app_<hex>' so safe today, but consider stricter delimiter/regex.",
+    "director_kyc entry keyed by string index (str(i)) — consistent across create-session flow and webhook branch; frontend reads dirKyc[i] with numeric key — verified working via Playwright (badge rendered for i=0).",
+    "server.py now 1110 lines; refactor into routers still recommended.",
+    "PDF letterhead+footer via canvas onFirstPage/onLaterPages callback; visually verified by main agent."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter6_audit_and_ubo.py"],
+  "success_rate": {"backend": "100% (20/20 new + 27/27 prior = 47/47)", "frontend": "100% (per-UBO KYC button + status badge + audit-trail list + toast all verified)"},
+  "test_credentials": "Owner rizkyjo@pegasusexchange.id / Pegasus2026! works. Registered applicant used for UI test.",
+  "seed_data_creation": "Several TEST_ prefixed applications created via applicant fixtures + 1 UI-created app; volume negligible; not cleaned.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New file /app/backend/tests/test_iter6_audit_and_ubo.py: TestPerUboSession (7 tests: unconfigured, 404 out-of-range, negative-idx, auth, RBAC, owner, missing-app), TestDiditEvents (4 tests: newest-first + fields + verified, auth, RBAC, 404), TestPerUboWebhook (2 tests: Approved updates director_kyc only, Declined updates director only), TestAppLevelWebhookRegression (3 tests), TestBrandedPdf (4 tests). Testids on ApplicationDetail confirmed working: director-kyc-{i}, director-kyc-status-{i}, didit-events, didit-card, export-pdf-button.",
+  "rca of the issue": "No bugs found this iteration."
+}

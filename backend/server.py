@@ -391,21 +391,17 @@ def verify_bank(company: dict) -> dict:
     return result
 
 # ---------------- Didit KYC/KYB (hosted sessions) ----------------
-def didit_create_session(app: dict) -> dict:
+def didit_create_session(vendor_data: str, callback_path: str, workflow_id: str = None, metadata: dict = None, expected_details: dict = None) -> dict:
     api_key = os.environ.get("DIDIT_API_KEY")
-    workflow_id = os.environ.get("DIDIT_WORKFLOW_ID")
+    wf = workflow_id or os.environ.get("DIDIT_WORKFLOW_ID")
     base = os.environ.get("DIDIT_BASE_URL", "https://verification.didit.me")
-    if not (api_key and workflow_id):
+    if not (api_key and wf):
         return {"configured": False}
-    company = app.get("company", {})
-    payload = {
-        "workflow_id": workflow_id,
-        "vendor_data": app["id"],
-        "callback": f"{FRONTEND_URL}/applications/{app['id']}",
-        "metadata": {"legal_name": company.get("legal_name", ""), "nib": company.get("nib", "")},
-        "language": "id",
-        "expected_details": {"company_name": company.get("legal_name", ""), "registry_country": "ID", "registration_number": company.get("nib", "")},
-    }
+    payload = {"workflow_id": wf, "vendor_data": vendor_data, "callback": f"{FRONTEND_URL}{callback_path}", "language": "id"}
+    if metadata:
+        payload["metadata"] = metadata
+    if expected_details:
+        payload["expected_details"] = expected_details
     try:
         r = requests.post(f"{base}/v3/session/", json=payload, headers={"x-api-key": api_key, "Content-Type": "application/json"}, timeout=25)
         r.raise_for_status()
@@ -477,7 +473,7 @@ def generate_report_pdf(a: dict) -> bytes:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=16 * mm, rightMargin=16 * mm)
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=34 * mm, bottomMargin=20 * mm, leftMargin=16 * mm, rightMargin=16 * mm)
     ss = getSampleStyleSheet()
     h = ParagraphStyle("h", parent=ss["Heading1"], fontSize=16, textColor=colors.HexColor("#0A0A0A"))
     h2 = ParagraphStyle("h2", parent=ss["Heading2"], fontSize=11, textColor=colors.HexColor("#2563EB"), spaceBefore=10)
@@ -488,8 +484,7 @@ def generate_report_pdf(a: dict) -> bytes:
     val = a.get("validation") or {}
     didit = a.get("didit") or {}
     el = []
-    el.append(Paragraph("Laporan Risiko KYB — CorpScore", h))
-    el.append(Paragraph(f"ID: {a.get('id')} · Dibuat: {a.get('created_at','')[:19]} · Status: {a.get('status')}", small))
+    el.append(Paragraph(f"ID: {a.get('id')} &nbsp;·&nbsp; Dibuat: {a.get('created_at','')[:19]} &nbsp;·&nbsp; Status: {a.get('status')}", small))
     el.append(Spacer(1, 6))
 
     el.append(Paragraph("Profil Perusahaan", h2))
@@ -535,7 +530,30 @@ def generate_report_pdf(a: dict) -> bytes:
     el.append(Paragraph(f"{a.get('decision') or a.get('status')} — {a.get('decided_by') or '-'} {('· ' + a.get('decision_note')) if a.get('decision_note') else ''} {('· ' + a.get('auto_reject_reason')) if a.get('auto_reject_reason') else ''}", body))
     el.append(Spacer(1, 12))
     el.append(Paragraph("Dokumen ini dihasilkan otomatis oleh CorpScore untuk keperluan arsip compliance.", small))
-    doc.build(el)
+    def _kop(canvas, doc_):
+        canvas.saveState()
+        w, hgt = A4
+        canvas.setFillColor(colors.HexColor("#0A0A0A"))
+        canvas.rect(0, hgt - 26 * mm, w, 26 * mm, fill=1, stroke=0)
+        canvas.setFillColor(colors.HexColor("#2563EB"))
+        canvas.rect(16 * mm, hgt - 17.5 * mm, 6 * mm, 6 * mm, fill=1, stroke=0)
+        canvas.setFillColor(colors.white)
+        canvas.setFont("Helvetica-Bold", 15)
+        canvas.drawString(25 * mm, hgt - 15 * mm, "CorpScore")
+        canvas.setFillColor(colors.HexColor("#9CA3AF"))
+        canvas.setFont("Helvetica", 8)
+        canvas.drawString(25 * mm, hgt - 20 * mm, "KYB & Credit Scoring Console — Laporan Risiko Compliance")
+        canvas.setFillColor(colors.HexColor("#60A5FA"))
+        canvas.setFont("Helvetica-Bold", 7)
+        canvas.drawRightString(w - 16 * mm, hgt - 15 * mm, "RAHASIA / CONFIDENTIAL")
+        canvas.setStrokeColor(colors.HexColor("#E5E7EB"))
+        canvas.line(16 * mm, 15 * mm, w - 16 * mm, 15 * mm)
+        canvas.setFillColor(colors.HexColor("#9CA3AF"))
+        canvas.setFont("Helvetica", 7)
+        canvas.drawString(16 * mm, 11 * mm, "CorpScore RegTech · Dokumen dihasilkan otomatis untuk arsip compliance")
+        canvas.drawRightString(w - 16 * mm, 11 * mm, f"Hal. {doc_.page}")
+        canvas.restoreState()
+    doc.build(el, onFirstPage=_kop, onLaterPages=_kop)
     return buf.getvalue()
 
 def rp_pdf(n):
@@ -843,7 +861,12 @@ async def didit_session_endpoint(app_id: str, user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
     if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Akses ditolak")
-    res = didit_create_session(a)
+    company = a.get("company", {})
+    res = didit_create_session(
+        vendor_data=a["id"], callback_path=f"/applications/{a['id']}",
+        metadata={"legal_name": company.get("legal_name", ""), "nib": company.get("nib", "")},
+        expected_details={"company_name": company.get("legal_name", ""), "registry_country": "ID", "registration_number": company.get("nib", "")},
+    )
     if res.get("session_id"):
         await db.applications.update_one({"id": app_id}, {"$set": {"didit": res, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return res
@@ -862,6 +885,37 @@ async def didit_decision_endpoint(app_id: str, user: dict = Depends(get_current_
     await db.applications.update_one({"id": app_id}, {"$set": {"didit": {**(a.get("didit") or {}), **res}, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return res
 
+@api_router.post("/applications/{app_id}/directors/{index}/didit-session")
+async def director_kyc_session(app_id: str, index: int, user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    directors = (a.get("company") or {}).get("directors") or []
+    if index < 0 or index >= len(directors):
+        raise HTTPException(status_code=404, detail="Direktur tidak ditemukan")
+    d = directors[index]
+    res = didit_create_session(
+        vendor_data=f"{app_id}:dir:{index}", callback_path=f"/applications/{app_id}",
+        workflow_id=os.environ.get("DIDIT_KYC_WORKFLOW_ID"),
+        metadata={"app": app_id, "director_index": index, "director_name": d.get("name", "")},
+    )
+    if res.get("session_id"):
+        dk = a.get("director_kyc") or {}
+        dk[str(index)] = {"name": d.get("name", ""), "session_id": res.get("session_id"), "url": res.get("url"), "status": res.get("status") or "Not Started"}
+        await db.applications.update_one({"id": app_id}, {"$set": {"director_kyc": dk, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return res
+
+@api_router.get("/applications/{app_id}/didit/events")
+async def didit_events(app_id: str, user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    return await db.didit_events.find({"app_id": app_id}, {"_id": 0}).sort("received_at", -1).to_list(200)
+
 @api_router.post("/didit/webhook")
 async def didit_webhook(request: Request):
     raw = await request.body()
@@ -869,15 +923,35 @@ async def didit_webhook(request: Request):
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid body")
-    if not verify_didit_signature(payload, request.headers):
+    verified = verify_didit_signature(payload, request.headers)
+    vendor = payload.get("vendor_data") or ""
+    base_app_id = vendor.split(":dir:")[0] if vendor else ""
+    await db.didit_events.insert_one({
+        "event_id": payload.get("event_id"), "app_id": base_app_id, "vendor_data": vendor,
+        "webhook_type": payload.get("webhook_type"), "status": payload.get("status"),
+        "session_id": payload.get("session_id"), "session_kind": payload.get("session_kind"),
+        "verified": verified, "environment": payload.get("environment"),
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+    if not verified:
         raise HTTPException(status_code=401, detail="Invalid signature")
     if payload.get("webhook_type") not in ("status.updated", "data.updated"):
         return {"ok": True}
-    app_id = payload.get("vendor_data")
     status = payload.get("status")
-    if not app_id:
+    if not vendor:
         return {"ok": True}
-    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if ":dir:" in vendor:
+        idx = vendor.split(":dir:")[1]
+        a = await db.applications.find_one({"id": base_app_id}, {"_id": 0})
+        if not a:
+            return {"ok": True}
+        dk = a.get("director_kyc") or {}
+        entry = dk.get(idx) or {}
+        entry.update({"session_id": payload.get("session_id"), "status": status})
+        dk[idx] = entry
+        await db.applications.update_one({"id": base_app_id}, {"$set": {"director_kyc": dk, "updated_at": datetime.now(timezone.utc).isoformat()}})
+        return {"ok": True}
+    a = await db.applications.find_one({"id": base_app_id}, {"_id": 0})
     if not a:
         return {"ok": True}
     didit = {**(a.get("didit") or {}), "session_id": payload.get("session_id"), "status": status,
@@ -889,7 +963,7 @@ async def didit_webhook(request: Request):
     elif status == "Declined" and a.get("status") not in ("approved", "rejected", "auto_rejected"):
         update.update({"status": "rejected", "decision": "rejected", "decided_by": "SYSTEM (Didit)",
                        "decision_note": "Auto-declined via Didit verification", "decided_at": datetime.now(timezone.utc).isoformat()})
-    await db.applications.update_one({"id": app_id}, {"$set": update})
+    await db.applications.update_one({"id": base_app_id}, {"$set": update})
     return {"ok": True}
 
 @api_router.get("/applications/{app_id}/report.pdf")
