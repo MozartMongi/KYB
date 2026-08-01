@@ -1,0 +1,111 @@
+{
+  "theme": {
+    "mode": "light",
+    "description": "Primary light theme for high-density data readability (Swiss & High Contrast), with selective dark mode components for emphasis (e.g., sidebars or modal takeovers)."
+  },
+  "typography": {
+    "headings": {
+      "font_family": "Manrope",
+      "weights": ["600", "800"],
+      "usage": "Authoritative, clean headers for the dashboard, risk metrics, and auth screens. Strict tracking (tracking-tight)."
+    },
+    "body": {
+      "font_family": "IBM Plex Sans",
+      "weights": ["400", "500"],
+      "usage": "Legible, technical sans for long-form text, UI labels, and standard tabular data."
+    },
+    "mono": {
+      "font_family": "IBM Plex Mono",
+      "weights": ["400", "600"],
+      "usage": "Used strictly for risk scores, NIB/NPWP IDs, wallet addresses, financial figures, and timestamps."
+    }
+  },
+  "colors": {
+    "archetype": "Swiss & High-Contrast (Archetype 4) + Enterprise Trust",
+    "backgrounds": {
+      "main": "#F8F9FA",
+      "surface": "#FFFFFF",
+      "sidebar_dark": "#0A0A0A"
+    },
+    "text": {
+      "primary": "#111827",
+      "secondary": "#4B5563",
+      "inverse": "#FFFFFF"
+    },
+    "brand": {
+      "primary": "#000000",
+      "accent": "#2563EB",
+      "accent_description": "Royal blue for primary CTAs, progress steps, and active states."
+    },
+    "risk_indicators": {
+      "high_risk": "#DC2626",
+      "medium_risk": "#D97706",
+      "low_risk": "#059669",
+      "neutral_data": "#4F46E5"
+    },
+    "rules": [
+      "No full-screen gradients. Texture > gloss.",
+      "Never use pure transparent backgrounds over content.",
+      "Ensure all text passes WCAG AA contrast (APCA preferred) over surfaces."
+    ]
+  },
+  "layouts": {
+    "strategy": "Grid Borders (Technical/Compliance Look) & High Density Data",
+    "spacing": "Dense internally (p-4 to p-6) but generous between major sections (gap-6 to gap-8).",
+    "dashboard_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 or 12-col bento grid. Tight gaps (gap-4).",
+    "bento_ratios": {
+      "summary_score": "col-span-1 row-span-2",
+      "primary_data_table": "col-span-3 row-span-2",
+      "risk_factors_list": "col-span-1 row-span-2"
+    },
+    "borders": "1px solid border-gray-200. No shadows for cards, rely on borders. Max radius 4px (rounded-sm or rounded-md).",
+    "alignment": "Strict left-alignment for all tabular and dense data. Center-align only empty states or distinct CTAs."
+  },
+  "surfaces_and_components": {
+    "strategy": "Grid Borders & Solid Surfaces (No Glassmorphism for Data)",
+    "cards": "Flat background, 1px subtle border, no shadow. Hover state: slightly darker border, DO NOT lift.",
+    "tables": "Table-first review queues. Consistent rows, clear sorting.",
+    "forms": "Pure Shadcn inputs, override rounded-md to rounded-sm. Explicit focus rings (focus:ring-2 focus:ring-blue-600).",
+    "headers": "Solid background with a hard bottom border (border-b).",
+    "buttons": "Sharp corners or max 4px radius. High contrast (Black or Royal Blue).",
+    "status_badges": "Minimal padding, stark borders, exact risk color text."
+  },
+  "motion": {
+    "philosophy": "Minimalist & Feedback-Driven",
+    "interactions": "Hover states on all rows and buttons. Subtle border color shifts. Micro-interactions for expanding rows/details.",
+    "transitions": "Specific properties only (e.g., transition-colors duration-200, transition-transform). No 'transition-all'.",
+    "accessibility": "Respect prefers-reduced-motion."
+  },
+  "icons_and_media": {
+    "icon_library": "@phosphor-icons/react",
+    "icon_usage": "Dense dashboards and developer/fintech tools require Phosphor Icons for precision.",
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1750969185331-e03829f72c7d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHwzfHxhYnN0cmFjdCUyMGRhdGElMjBub2RlcyUyMGRhcmt8ZW58MHx8fHwxNzg1NTY3OTQzfDA&ixlib=rb-4.1.0&q=85",
+        "category": "auth_background",
+        "description": "Abstract blue lines and dots on black background. Use as a dark thematic overlay for the Auth/Login screen side panel (opacity adjusted)."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1679239108020-aca50acd5f00?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwzfHxqYWthcnRhJTIwc2t5bGluZSUyMGFyY2hpdGVjdHVyZXxlbnwwfHx8fDE3ODU1Njc5NDJ8MA&ixlib=rb-4.1.0&q=85",
+        "category": "empty_state_or_onboarding",
+        "description": "Jakarta skyline. Use subtle greyscale or low opacity for onboarding welcome screen to contextualize 'Crypto Exchange in Indonesia'."
+      }
+    ],
+    "charts": "Recharts or Shadcn charts. Use sharp rectangles for bars, no rounded corners. Dotted grid lines. Use Risk Indicator colors."
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic outputs. Avoid 'AI slop' by strictly using the specified fonts (Manrope + IBM Plex Sans/Mono) and sharp, technical borders.",
+    "Do NOT apply universal transition 'transition: all'.",
+    "Do NOT center align the app container. Strict left-alignment for functional RegTech UI.",
+    "Use Phosphor Icons, NOT emojis.",
+    "Data-dense tables must have explicit hover states (e.g., hover:bg-gray-50).",
+    "All interactive elements MUST have a data-testid attribute in kebab-case (e.g., data-testid='approve-kyb-button').",
+    "Use pure Shadcn components customized with 0-4px border radius for a professional, banking-grade aesthetic.",
+    "Never use generic placeholders for risk scores; use exact numeric structures (e.g., 84/100) using IBM Plex Mono.",
+    "Implement Sonner for toast notifications on approvals/rejections."
+  ],
+  "accessibility": {
+    "focus": "Clear focus indicators with high contrast (focus:ring-2 focus:ring-black or brand accent).",
+    "data_testid": "MANDATORY on all buttons, links, inputs, and tab triggers."
+  }
+}
