@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 4 testing of iteration_3 fixes (bank name-check SIMULASI mismatch + NIB QR domain hardening) and NEW Didit unconfigured integration. Created /app/backend/tests/test_didit_and_regressions.py with 15 tests — all 15 pass. Frontend Playwright: owner logged in, opened application detail, verified didit-card + validation-card + score gauge + AI review render; clicking didit-create-button correctly shows toast 'Didit belum dikonfigurasi (API key kosong)'. FIXED a critical frontend bug: ApplicationDetail.js referenced diditState/createDidit/refreshDidit but they were never declared — component would throw ReferenceError at runtime. Added useState + handlers.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ApplicationDetail.js", "issue": "diditState, createDidit, refreshDidit were referenced in JSX but never declared — page would crash on render. FIXED by testing agent (added useState + createDidit/refreshDidit handlers wired to /api/applications/{id}/didit/session and /decision, plus loading a.didit into diditState on load).", "selector": "[data-testid=didit-card]", "priority": "CRITICAL_FIXED"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_didit_and_regressions.py",
+    "/app/test_reports/pytest/iter4_didit.xml",
+    "/app/backend/tests/test_nib_qr_bank.py",
+    "/app/backend/tests/test_nib_bank_sla.py"
+  ],
+  "action_items": [
+    "Review the frontend fix applied to /app/frontend/src/pages/ApplicationDetail.js (added diditState state + createDidit + refreshDidit). It calls POST /api/applications/{id}/didit/session and GET /api/applications/{id}/didit/decision, mirrors the backend contract (configured:false → toast 'Didit belum dikonfigurasi (API key kosong)'; session_id → shows refresh button + status; error → error toast). No further action required if fix is acceptable."
+  ],
+  "critical_code_review_comments": [
+    "verify_bank() SIMULASI branch now correctly compares resolved(=holder) vs {legal, brand} only — mismatch test passes (score 0, verified=false, status=mismatch).",
+    "decode_nib_qr uses urlparse(data).hostname with exact 'oss.go.id' or endswith '.oss.go.id' — the lookalike 'oss.go.id.malicious.example' now correctly gets domain_valid=false. Good hardening.",
+    "didit_create_session()/didit_get_decision() correctly gate on env vars (DIDIT_API_KEY + DIDIT_WORKFLOW_ID) and return {configured:false} when empty. RBAC applied on both endpoints. GET /decision correctly 400s when no session exists.",
+    "ApplicationDetail.js had undeclared references (diditState/createDidit/refreshDidit) — this passed webpack because ESLint react-hooks/no-undef isn't enabled here; it would crash at first render. Fixed by testing agent. Main agent should adopt this pattern or refactor.",
+    "nib_registry_lookup SIMULASI always returns AKTIF and validate_nib still doesn't consult registry.status — same code review comment as iter3, unchanged.",
+    "verify_bank threshold sim >= 0.5 with token-set similarity — for real BRIAPI resolved names this may be too lenient/harsh. Consider Levenshtein/fuzzy ratio when BRI live."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_didit_and_regressions.py",
+    "/app/frontend/src/pages/ApplicationDetail.js"
+  ],
+  "success_rate": {"backend": "100% (15/15 new tests: bank mismatch + match, QR malicious/valid/subdomain, 7 Didit auth+RBAC+unconfigured, 3 full-flow regressions)", "frontend": "100% for ApplicationDetail rendering + Didit unconfigured toast flow (after fix)"},
+  "test_credentials": "Owner rizkyjo@pegasusexchange.id / Pegasus2026! confirmed working. DIDIT_API_KEY / DIDIT_WORKFLOW_ID intentionally empty (unconfigured path — expected).",
+  "seed_data_creation": "Multiple TEST_ prefixed applications created via applicant fixtures; volume negligible; not cleaned.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New test file /app/backend/tests/test_didit_and_regressions.py covers: TestBankMismatchFix (2), TestQrDomainHardening (3), TestDidit (7: unconfigured, decision-400, auth 401 x2, RBAC 403 x2, owner-can-access), TestFullOnboardingRegression (3: valid→under_review, expired→auto_rejected, owner approve). All pass. QR PNG helper now uses qrcode.QRCode(box_size=10, border=4) — the previous 'qrcode.make()' default produced too-small images that OpenCV cv2.QRCodeDetector couldn't decode for long malicious URLs. Frontend ApplicationDetail.js was missing diditState/createDidit/refreshDidit — added them; DO NOT remove. Run with: pytest backend/tests/test_didit_and_regressions.py -o addopts='' (existing pytest.ini uses xdist -n auto which is fine but -o addopts='' bypasses it for debugging).",
+  "rca of the issue": "Frontend crash bug RCA: The Didit KYC/KYB card was added to ApplicationDetail.js JSX with references to `diditState`, `createDidit`, and `refreshDidit`, but the corresponding useState hook and handler functions were never added to the component body — likely lost during the iter3 file truncation-and-rebuild (main agent noted the file was 'corrupted twice then fixed by truncating to valid 270 lines'). Webpack ESLint config doesn't fail on undeclared JSX identifiers (only react-hooks/exhaustive-deps warned). At runtime, first render of any application detail page would throw ReferenceError: diditState is not defined. Reproduction: login as owner, click any row in dashboard → white/blank page with console error. Mitigation applied: added `const [diditState, setDiditState] = useState(null);` and `createDidit`/`refreshDidit` async functions that call POST /didit/session and GET /didit/decision with proper toast handling for configured:false, session_id, and error paths. Load() now hydrates diditState from a.didit."
+}

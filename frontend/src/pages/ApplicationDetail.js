@@ -15,10 +15,37 @@ export default function ApplicationDetail() {
   const [a, setA] = useState(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [diditState, setDiditState] = useState(null);
   const isOfficer = user?.role === "owner" || user?.role === "officer";
 
-  const load = () => api.get(`/applications/${id}`).then((r) => setA(r.data)).catch(() => toast.error("Gagal memuat"));
+  const load = () => api.get(`/applications/${id}`).then((r) => { setA(r.data); setDiditState(r.data.didit || null); }).catch(() => toast.error("Gagal memuat"));
   useEffect(() => { load(); }, [id]);
+
+  const createDidit = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/applications/${id}/didit/session`);
+      if (r.data?.configured === false) {
+        toast.message("Didit belum dikonfigurasi (API key kosong)");
+      } else if (r.data?.error) {
+        toast.error(`Didit error: ${r.data.error}`);
+      } else if (r.data?.session_id) {
+        setDiditState(r.data);
+        toast.success("Sesi Didit dibuat");
+      }
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
+  const refreshDidit = async () => {
+    setBusy(true);
+    try {
+      const r = await api.get(`/applications/${id}/didit/decision`);
+      if (r.data?.configured === false) toast.message("Didit belum dikonfigurasi");
+      else { setDiditState((s) => ({ ...(s || {}), ...r.data })); toast.success("Status Didit diperbarui"); }
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
 
   const decide = async (decision) => {
     setBusy(true);
@@ -245,30 +272,6 @@ export default function ApplicationDetail() {
               <div className="flex gap-3">
                 <Button data-testid="approve-button" onClick={() => decide("approved")} disabled={busy} className="rounded-sm bg-emerald-600 hover:bg-emerald-700 gap-2"><CheckCircle2 className="w-4 h-4" /> Setujui</Button>
                 <Button data-testid="reject-button" onClick={() => decide("rejected")} disabled={busy} variant="outline" className="rounded-sm border-red-300 text-red-700 hover:bg-red-50 gap-2"><XCircle className="w-4 h-4" /> Tolak</Button>
-              </div>
-            </div>
-          )}
-
-          {a.decision && a.status !== "auto_rejected" && (
-            <div className={`rounded-sm p-4 text-sm border ${a.decision === "approved" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-800"}`}>
-              Diputuskan <b>{a.decision === "approved" ? "DISETUJUI" : "DITOLAK"}</b> oleh {a.decided_by}. {a.decision_note && `— "${a.decision_note}"`}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Info({ label, value, mono }) {
-  return (
-    <div>
-      <div className="text-xs text-gray-400 uppercase tracking-wider">{label}</div>
-      <div className={`text-gray-900 ${mono ? "font-mono" : ""}`}>{value || "—"}</div>
-    </div>
-  );
-}
--testid="reject-button" onClick={() => decide("rejected")} disabled={busy} variant="outline" className="rounded-sm border-red-300 text-red-700 hover:bg-red-50 gap-2"><XCircle className="w-4 h-4" /> Tolak</Button>
               </div>
             </div>
           )}
