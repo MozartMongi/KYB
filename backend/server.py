@@ -433,6 +433,129 @@ def didit_get_decision(session_id: str) -> dict:
         logger.error(f"Didit decision failed: {e}")
         return {"configured": True, "error": str(e)}
 
+def _shorten_floats(data):
+    if isinstance(data, dict):
+        return {k: _shorten_floats(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_shorten_floats(x) for x in data]
+    if isinstance(data, float) and data.is_integer():
+        return int(data)
+    return data
+
+def verify_didit_signature(body_json: dict, headers) -> bool:
+    import hmac, hashlib
+    secret = os.environ.get("DIDIT_WEBHOOK_SECRET")
+    if not secret:
+        return True  # no secret configured -> accept (dev/unconfigured)
+    ts = headers.get("x-timestamp")
+    if not ts:
+        return False
+    try:
+        if abs(int(time.time()) - int(ts)) > 300:
+            return False
+    except ValueError:
+        return False
+    sig_v2 = headers.get("x-signature-v2")
+    if sig_v2:
+        canonical = json.dumps(_shorten_floats(body_json), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        expected = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sig_v2, expected):
+            return True
+    sig_simple = headers.get("x-signature-simple")
+    if sig_simple:
+        canonical = ":".join([str(body_json.get("timestamp", "")), str(body_json.get("session_id", "")), str(body_json.get("status", "")), str(body_json.get("webhook_type", ""))])
+        expected = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sig_simple, expected):
+            return True
+    return False
+
+def generate_report_pdf(a: dict) -> bytes:
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=16 * mm, rightMargin=16 * mm)
+    ss = getSampleStyleSheet()
+    h = ParagraphStyle("h", parent=ss["Heading1"], fontSize=16, textColor=colors.HexColor("#0A0A0A"))
+    h2 = ParagraphStyle("h2", parent=ss["Heading2"], fontSize=11, textColor=colors.HexColor("#2563EB"), spaceBefore=10)
+    body = ss["BodyText"]
+    small = ParagraphStyle("small", parent=body, fontSize=8, textColor=colors.grey)
+    co = a.get("company", {})
+    score = a.get("score") or {}
+    val = a.get("validation") or {}
+    didit = a.get("didit") or {}
+    el = []
+    el.append(Paragraph("Laporan Risiko KYB — CorpScore", h))
+    el.append(Paragraph(f"ID: {a.get('id')} · Dibuat: {a.get('created_at','')[:19]} · Status: {a.get('status')}", small))
+    el.append(Spacer(1, 6))
+
+    el.append(Paragraph("Profil Perusahaan", h2))
+    ci = [["Nama Legal", co.get("legal_name", "-")], ["Jenis / Industri", f"{co.get('entity_type','-')} · {co.get('industry','-')}"],
+          ["NIB", co.get("nib", "-")], ["Masa berlaku NIB", co.get("nib_expiry_date", "-")], ["NPWP", co.get("npwp", "-")],
+          ["Pendapatan Tahunan", rp_pdf(co.get("annual_revenue_idr"))], ["Modal Disetor", rp_pdf(co.get("paid_up_capital_idr"))]]
+    el.append(_pdf_table(ci, Table, TableStyle, colors))
+
+    el.append(Paragraph("Skor Kredit / Risiko", h2))
+    si = [["Skor Akhir", str(score.get("final_score", "-"))], ["Tingkat Risiko", str(score.get("risk_level", "-"))],
+          ["Legalitas (25%)", str(score.get("legality", "-"))], ["Keuangan (25%)", str(score.get("financial", "-"))],
+          ["Screening AML (30%)", str(score.get("screening", "-"))], ["Industri (20%)", str(score.get("industry", "-"))],
+          ["Rule-based / AI adj", f"{score.get('overall_rule','-')} / {score.get('ai_adjustment','-')}"]]
+    el.append(_pdf_table(si, Table, TableStyle, colors))
+
+    el.append(Paragraph("Validasi Sistem", h2))
+    nib_v = val.get("nib") or {}
+    bank_v = val.get("bank") or {}
+    vi = [["NIB valid", str(nib_v.get("valid", "-"))], ["NIB kedaluwarsa", str(nib_v.get("expired", "-"))],
+          ["Registry OSS", f"{(nib_v.get('registry') or {}).get('source','-')} · {(nib_v.get('registry') or {}).get('status','-')}"],
+          ["Bank", f"{bank_v.get('bank_name','-')} {bank_v.get('account_number_masked','')}"],
+          ["Bank verified", f"{bank_v.get('verified','-')} ({bank_v.get('name_match_score',0)}%) · {bank_v.get('source','-')}"]]
+    el.append(_pdf_table(vi, Table, TableStyle, colors))
+
+    el.append(Paragraph("Screening Sanksi / PEP / Adverse Media", h2))
+    hits = a.get("screening_hits") or []
+    if hits:
+        data = [["Nama", "Tipe", "Daftar"]] + [[hh.get("matched_name", "-"), hh.get("type", "-"), hh.get("list", "-")] for hh in hits]
+        el.append(_pdf_table(data, Table, TableStyle, colors, header=True))
+    else:
+        el.append(Paragraph("Tidak ada kecocokan watchlist.", body))
+
+    el.append(Paragraph("Verifikasi Didit (KYC/KYB)", h2))
+    if didit.get("session_id"):
+        di = [["Session", didit.get("session_id", "-")], ["Status", didit.get("status", "-")],
+              ["Registry", str(didit.get("registry_status", "-"))], ["Risk Didit", str(didit.get("risk_level", "-"))],
+              ["AML hits", str(didit.get("aml_total_hits", "-"))]]
+        el.append(_pdf_table(di, Table, TableStyle, colors))
+    else:
+        el.append(Paragraph("Belum ada sesi Didit.", body))
+
+    el.append(Paragraph("Keputusan", h2))
+    el.append(Paragraph(f"{a.get('decision') or a.get('status')} — {a.get('decided_by') or '-'} {('· ' + a.get('decision_note')) if a.get('decision_note') else ''} {('· ' + a.get('auto_reject_reason')) if a.get('auto_reject_reason') else ''}", body))
+    el.append(Spacer(1, 12))
+    el.append(Paragraph("Dokumen ini dihasilkan otomatis oleh CorpScore untuk keperluan arsip compliance.", small))
+    doc.build(el)
+    return buf.getvalue()
+
+def rp_pdf(n):
+    try:
+        return "Rp " + f"{int(n or 0):,}".replace(",", ".")
+    except Exception:
+        return "Rp 0"
+
+def _pdf_table(rows, Table, TableStyle, colors, header=False):
+    t = Table(rows, colWidths=None, hAlign="LEFT")
+    style = [("FONTSIZE", (0, 0), (-1, -1), 9), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+             ("BOTTOMPADDING", (0, 0), (-1, -1), 4), ("TOPPADDING", (0, 0), (-1, -1), 4),
+             ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#E5E7EB"))]
+    if header:
+        style += [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0A0A0A")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]
+    else:
+        style += [("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"), ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#374151"))]
+    t.setStyle(TableStyle(style))
+    return t
+
 def screen_watchlist(company: dict):
     hits = []
     candidates = [company.get("legal_name", ""), company.get("brand_name", "")]
@@ -738,6 +861,47 @@ async def didit_decision_endpoint(app_id: str, user: dict = Depends(get_current_
     res = didit_get_decision(sid)
     await db.applications.update_one({"id": app_id}, {"$set": {"didit": {**(a.get("didit") or {}), **res}, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return res
+
+@api_router.post("/didit/webhook")
+async def didit_webhook(request: Request):
+    raw = await request.body()
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid body")
+    if not verify_didit_signature(payload, request.headers):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    if payload.get("webhook_type") not in ("status.updated", "data.updated"):
+        return {"ok": True}
+    app_id = payload.get("vendor_data")
+    status = payload.get("status")
+    if not app_id:
+        return {"ok": True}
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        return {"ok": True}
+    didit = {**(a.get("didit") or {}), "session_id": payload.get("session_id"), "status": status,
+             "session_kind": payload.get("session_kind"), "last_event_id": payload.get("event_id")}
+    update = {"didit": didit, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if status == "Approved" and a.get("status") not in ("approved", "rejected", "auto_rejected"):
+        update.update({"status": "approved", "decision": "approved", "decided_by": "SYSTEM (Didit)",
+                       "decision_note": "Auto-approved via Didit verification", "decided_at": datetime.now(timezone.utc).isoformat()})
+    elif status == "Declined" and a.get("status") not in ("approved", "rejected", "auto_rejected"):
+        update.update({"status": "rejected", "decision": "rejected", "decided_by": "SYSTEM (Didit)",
+                       "decision_note": "Auto-declined via Didit verification", "decided_at": datetime.now(timezone.utc).isoformat()})
+    await db.applications.update_one({"id": app_id}, {"$set": update})
+    return {"ok": True}
+
+@api_router.get("/applications/{app_id}/report.pdf")
+async def report_pdf(app_id: str, user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    pdf = generate_report_pdf(a)
+    fname = f"KYB_{(a.get('company') or {}).get('legal_name','report').replace(' ', '_')}.pdf"
+    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=\"{fname}\""})
 
 @api_router.post("/applications/{app_id}/verify-nib")
 async def verify_nib_endpoint(app_id: str, file: UploadFile = File(None), user: dict = Depends(get_current_user)):

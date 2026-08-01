@@ -6,7 +6,7 @@ import { RiskBadge, StatusBadge, ScoreGauge, FactorBar } from "@/components/kyb"
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Sparkles, CheckCircle2, XCircle, Building2, Users, FileText, BadgeCheck, CalendarClock, Ban, ShieldCheck, ExternalLink, RefreshCw } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Sparkles, CheckCircle2, XCircle, Building2, Users, FileText, BadgeCheck, CalendarClock, Ban, ShieldCheck, ExternalLink, RefreshCw, FileDown } from "lucide-react";
 
 export default function ApplicationDetail() {
   const { id } = useParams();
@@ -57,6 +57,21 @@ export default function ApplicationDetail() {
     finally { setBusy(false); }
   };
 
+  const exportPdf = async () => {
+    setBusy(true);
+    try {
+      const r = await api.get(`/applications/${id}/report.pdf`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `KYB_${(a.company?.legal_name || "report").replace(/\s+/g, "_")}.pdf`;
+      document.body.appendChild(link); link.click(); link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Laporan PDF diunduh");
+    } catch (e) { toast.error("Gagal mengunduh PDF"); }
+    finally { setBusy(false); }
+  };
+
   if (!a) return <div className="p-8 text-gray-400">Memuat…</div>;
   const co = a.company || {};
   const score = a.score;
@@ -77,6 +92,7 @@ export default function ApplicationDetail() {
             <p className="text-sm text-gray-500 font-mono">{co.entity_type} · {co.industry} · {a.applicant_email}</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button data-testid="export-pdf-button" onClick={exportPdf} disabled={busy} variant="outline" className="rounded-sm gap-2 h-8 text-xs"><FileDown className="w-3.5 h-3.5" /> Ekspor PDF</Button>
             <StatusBadge status={a.status} />
             {score && <RiskBadge level={score.risk_level} />}
           </div>

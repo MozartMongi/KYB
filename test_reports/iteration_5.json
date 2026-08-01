@@ -1,0 +1,28 @@
+{
+  "summary": "Iteration 5: tested PDF export + Didit webhook auto-sync (2 new features) + guards + regression. Created /app/backend/tests/test_pdf_and_webhook.py with 12 tests — ALL 12 PASS. Prior regression suite (test_didit_and_regressions.py, 15 tests) still passes 100%. Frontend Playwright: logged in as owner, opened application detail, clicked 'Ekspor PDF' button — browser download intercepted, filename KYB_TEST_PT_Approve_*.pdf, magic bytes %PDF confirmed, and toast 'Laporan PDF diunduh' visible.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_pdf_and_webhook.py",
+    "/app/test_reports/pytest/iter5_pdf_webhook.xml",
+    "/app/backend/tests/test_didit_and_regressions.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PDF endpoint correctly guards ownership (owner/officer OR applicant_user_id == user.user_id else 403). 404 on missing app. content-type application/pdf. Content-Disposition uses legal_name — safe from spaces via replace, but no sanitization of quotes/newlines in legal_name; low risk given Pydantic input validation.",
+    "verify_didit_signature returns True when DIDIT_WEBHOOK_SECRET empty — matches spec (dev/unconfigured accepts). When set, requires x-timestamp within 300s window + x-signature-v2 (HMAC over canonical sorted JSON) OR x-signature-simple (HMAC over ts:session_id:status:webhook_type). Both hmac.compare_digest — good.",
+    "didit_webhook idempotency: guarded via `a.get('status') not in ('approved','rejected','auto_rejected')` — but note the didit sub-object IS still updated (session_id/status/last_event_id) even when guard prevents state change. This is intentional & correct for observability, but may cause confusion — didit.status='Declined' can appear on an already-'approved' application (from a late webhook). Acceptable per spec.",
+    "Non-decision webhook types return {ok:true} before touching DB — good. Unknown vendor_data also returns {ok:true} gracefully (no info leak).",
+    "generate_report_pdf uses reportlab SimpleDocTemplate with sections for company, score breakdown, validation NIB+bank, screening, Didit, decision. PDF rendered ~KB range; %PDF-1.4 header verified.",
+    "Minor: didit_webhook does not log incoming event_id anywhere queryable (only stored in didit.last_event_id, overwritten on next event). If audit trail of all webhook events is required, consider append-only collection. Not required by spec.",
+    "server.py is 1036 lines — approaching the 700-line split guideline. Consider splitting into routers/{auth,applications,didit,verify,pdf}.py in a future refactor."
+  ],
+  "updated_files": ["/app/backend/tests/test_pdf_and_webhook.py"],
+  "success_rate": {"backend": "100% (12/12 new + 15/15 regression = 27/27)", "frontend": "100% (PDF export button downloads valid PDF + toast confirmed)"},
+  "test_credentials": "Owner rizkyjo@pegasusexchange.id / Pegasus2026! working. DIDIT_WEBHOOK_SECRET empty by design → webhook accepts unsigned.",
+  "seed_data_creation": "Several TEST_ prefixed applications created via applicant fixtures; volume negligible; not cleaned.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New test file /app/backend/tests/test_pdf_and_webhook.py: TestPdfExport (5 tests: applicant own, 401 unauth, 403 other applicant, owner any, 404 missing) + TestDiditWebhook (7 tests: Approved→approved+SYSTEM(Didit), Declined→rejected+SYSTEM(Didit), guard no-override when already-finalized, non-decision event no-op, unknown vendor_data 200, missing vendor_data 200, unsigned accepted while secret empty). Ekspor PDF button data-testid='export-pdf-button' on /applications/:id. All prior tests untouched.",
+  "rca of the issue": "No new bugs found this iteration."
+}
