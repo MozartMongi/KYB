@@ -112,7 +112,7 @@ class TestPerUboSession:
         aid = _create(applicant)
         r = applicant.post(f"{API}/applications/{aid}/directors/0/didit-session")
         assert r.status_code == 200, r.text
-        assert r.json().get("configured") is False
+        assert r.json().get("configured") == False
 
     def test_index_out_of_range_404(self, applicant):
         aid = _create(applicant)
@@ -139,7 +139,7 @@ class TestPerUboSession:
         aid = _create(applicant)
         r = owner.post(f"{API}/applications/{aid}/directors/0/didit-session")
         assert r.status_code == 200
-        assert r.json().get("configured") is False
+        assert r.json().get("configured") == False
 
     def test_missing_application_404(self, applicant):
         r = applicant.post(f"{API}/applications/nonexistent_xyz/directors/0/didit-session")
@@ -177,7 +177,7 @@ class TestDiditEvents:
         rec = [e.get("received_at") for e in evs]
         assert rec == sorted(rec, reverse=True), rec
         # verified True because DIDIT_WEBHOOK_SECRET is empty
-        assert evs[0]["verified"] is True
+        assert evs[0]["verified"] == True
 
     def test_events_requires_auth(self, applicant):
         aid = _create(applicant)

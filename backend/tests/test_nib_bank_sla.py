@@ -81,8 +81,8 @@ class TestAutoReject:
         assert "kedaluwarsa" in (d.get("auto_reject_reason") or "").lower()
         assert d["decided_by"].startswith("SYSTEM")
         # validation card
-        assert d["validation"]["nib"]["expired"] is True
-        assert d["validation"]["nib"]["valid"] is False
+        assert d["validation"]["nib"]["expired"] == True
+        assert d["validation"]["nib"]["valid"] == False
         # No SLA when auto-rejected
         assert d.get("sla_due_at") in (None, "")
 
@@ -94,7 +94,7 @@ class TestAutoReject:
         assert r2.status_code == 200
         d = r2.json()
         assert d["status"] == "auto_rejected"
-        assert d["validation"]["nib"]["valid"] is False
+        assert d["validation"]["nib"]["valid"] == False
 
     def test_owner_cannot_decide_auto_rejected(self, owner, applicant):
         # Create + submit expired
@@ -139,7 +139,7 @@ class TestValidNibSlaQueue:
         r2 = applicant.post(f"{API}/applications/{aid}/submit")
         d = r2.json()
         bank = d["validation"]["bank"]
-        assert bank["verified"] is True
+        assert bank["verified"] == True
         assert bank["status"] == "verified"
         assert bank["name_match_score"] >= 50
         assert bank["account_number_masked"].startswith("••••")
@@ -151,7 +151,7 @@ class TestValidNibSlaQueue:
         r2 = applicant.post(f"{API}/applications/{aid}/submit")
         d = r2.json()
         bank = d["validation"]["bank"]
-        assert bank["verified"] is False
+        assert bank["verified"] == False
         assert bank["status"] == "mismatch"
         assert bank["name_match_score"] < 50
 
@@ -164,8 +164,8 @@ class TestValidNibSlaQueue:
         r3 = owner.get(f"{API}/applications/{aid}")
         d = r3.json()
         assert d["status"] == "under_review"
-        assert d["validation"]["nib"]["valid"] is True
-        assert d["validation"]["bank"]["verified"] is True
+        assert d["validation"]["nib"]["valid"] == True
+        assert d["validation"]["bank"]["verified"] == True
         assert d["sla_due_at"]
 
 

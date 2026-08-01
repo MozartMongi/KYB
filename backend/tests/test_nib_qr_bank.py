@@ -87,16 +87,16 @@ class TestVerifyNibQR:
         r = requests.post(f"{API}/applications/{aid}/verify-nib", files=files, headers=h)
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d["nib"]["format_valid"] is True
+        assert d["nib"]["format_valid"] == True
         qr = d["nib"]["qr"]
-        assert qr["success"] is True
-        assert qr["domain_valid"] is True
+        assert qr["success"] == True
+        assert qr["domain_valid"] == True
         assert qr["nib_in_qr"] == nib
-        assert qr["matches_input"] is True
+        assert qr["matches_input"] == True
         reg = d["nib"]["registry"]
         assert reg["source"] == "SIMULASI"
         assert reg["status"] == "AKTIF"
-        assert d["nib"]["valid"] is True
+        assert d["nib"]["valid"] == True
 
     def test_qr_mismatch_marks_invalid(self, applicant):
         aid = _create(applicant, nib="9120001112223")
@@ -107,8 +107,8 @@ class TestVerifyNibQR:
         r = requests.post(f"{API}/applications/{aid}/verify-nib", files=files, headers=h)
         assert r.status_code == 200
         d = r.json()
-        assert d["nib"]["qr"]["matches_input"] is False
-        assert d["nib"]["valid"] is False
+        assert d["nib"]["qr"]["matches_input"] == False
+        assert d["nib"]["valid"] == False
         assert "qr" in (d["nib"]["reason"] or "").lower() or "cocok" in (d["nib"]["reason"] or "").lower()
 
     def test_qr_mismatch_submit_auto_rejected(self, applicant):
@@ -133,10 +133,10 @@ class TestVerifyNibQR:
         r = requests.post(f"{API}/applications/{aid}/verify-nib", files=files, headers=h)
         assert r.status_code == 200
         qr = r.json()["nib"]["qr"]
-        assert qr["success"] is True
-        assert qr["domain_valid"] is False
+        assert qr["success"] == True
+        assert qr["domain_valid"] == False
         assert qr["nib_in_qr"] == "9120001112223"
-        assert qr["matches_input"] is True  # NIB itself matches; only domain flag differs
+        assert qr["matches_input"] == True  # NIB itself matches; only domain flag differs
 
     def test_format_invalid_nib(self, applicant):
         aid = _create(applicant, nib="123")
@@ -145,8 +145,8 @@ class TestVerifyNibQR:
         r = requests.post(f"{API}/applications/{aid}/verify-nib", headers=h)
         assert r.status_code == 200
         d = r.json()
-        assert d["nib"]["format_valid"] is False
-        assert d["nib"]["valid"] is False
+        assert d["nib"]["format_valid"] == False
+        assert d["nib"]["valid"] == False
 
     def test_verify_nib_requires_auth(self, applicant):
         aid = _create(applicant)
@@ -169,7 +169,7 @@ class TestVerifyBank:
         assert r.status_code == 200, r.text
         b = r.json()["bank"]
         assert b["source"] == "SIMULASI"
-        assert b["verified"] is True
+        assert b["verified"] == True
         assert b["status"] == "verified"
         assert b["resolved_name"] == legal
         assert b["name_match_score"] >= 50
@@ -180,7 +180,7 @@ class TestVerifyBank:
         r = applicant.post(f"{API}/applications/{aid}/verify-bank")
         assert r.status_code == 200
         b = r.json()["bank"]
-        assert b["verified"] is False
+        assert b["verified"] == False
         assert b["status"] == "mismatch"
         assert b["name_match_score"] < 50
 
@@ -216,11 +216,11 @@ class TestSubmitIntegration:
         # persisted qr + registry survive via GET (owner)
         r3 = owner.get(f"{API}/applications/{aid}")
         v = r3.json()["validation"]
-        assert v["nib"]["qr"]["domain_valid"] is True
-        assert v["nib"]["qr"]["matches_input"] is True
+        assert v["nib"]["qr"]["domain_valid"] == True
+        assert v["nib"]["qr"]["matches_input"] == True
         assert v["nib"]["registry"]["source"] == "SIMULASI"
         assert v["bank"]["source"] == "SIMULASI"
-        assert v["bank"]["verified"] is True
+        assert v["bank"]["verified"] == True
 
     def test_finalised_cannot_resubmit(self, applicant):
         # expired -> auto_rejected then re-submit blocked (per code review from iter2)

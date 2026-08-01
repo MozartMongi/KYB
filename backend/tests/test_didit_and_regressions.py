@@ -93,7 +93,7 @@ class TestBankMismatchFix:
         assert r.status_code == 200, r.text
         b = r.json()["bank"]
         assert b["source"] == "SIMULASI"
-        assert b["verified"] is False, b
+        assert b["verified"] == False, b
         assert b["status"] == "mismatch", b
         assert b["name_match_score"] < 50, b
 
@@ -103,7 +103,7 @@ class TestBankMismatchFix:
         r = applicant.post(f"{API}/applications/{aid}/verify-bank")
         assert r.status_code == 200
         b = r.json()["bank"]
-        assert b["verified"] is True
+        assert b["verified"] == True
         assert b["status"] == "verified"
 
 
@@ -117,8 +117,8 @@ class TestQrDomainHardening:
                           files={"file": ("nib.png", qr_bytes, "image/png")}, headers=h)
         assert r.status_code == 200, r.text
         qr = r.json()["nib"]["qr"]
-        assert qr["success"] is True
-        assert qr["domain_valid"] is False, qr
+        assert qr["success"] == True
+        assert qr["domain_valid"] == False, qr
 
     def test_real_oss_domain_valid(self, applicant):
         aid = _create(applicant, nib="9120001112223")
@@ -128,7 +128,7 @@ class TestQrDomainHardening:
                           files={"file": ("nib.png", qr_bytes, "image/png")}, headers=h)
         assert r.status_code == 200
         qr = r.json()["nib"]["qr"]
-        assert qr["domain_valid"] is True, qr
+        assert qr["domain_valid"] == True, qr
 
     def test_subdomain_oss_valid(self, applicant):
         aid = _create(applicant, nib="9120001112223")
@@ -140,7 +140,7 @@ class TestQrDomainHardening:
         qr = r.json()["nib"]["qr"]
         if not qr.get("success"):
             pytest.skip(f"opencv couldn't decode subdomain QR on server: {qr}")
-        assert qr["domain_valid"] is True, qr
+        assert qr["domain_valid"] == True, qr
 
 
 # ---------- Didit unconfigured + RBAC ----------
@@ -150,7 +150,7 @@ class TestDidit:
         r = applicant.post(f"{API}/applications/{aid}/didit/session")
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d.get("configured") is False, d
+        assert d.get("configured") == False, d
 
     def test_didit_decision_requires_session(self, applicant):
         aid = _create(applicant)
@@ -181,7 +181,7 @@ class TestDidit:
         aid = _create(applicant)
         r = owner.post(f"{API}/applications/{aid}/didit/session")
         assert r.status_code == 200
-        assert r.json().get("configured") is False
+        assert r.json().get("configured") == False
 
 
 # ---------- Regression full onboarding ----------
@@ -205,9 +205,9 @@ class TestFullOnboardingRegression:
         assert r3.status_code == 200
         body = r3.json()
         v = body["validation"]
-        assert v["nib"]["qr"]["domain_valid"] is True
+        assert v["nib"]["qr"]["domain_valid"] == True
         assert v["nib"]["registry"]["source"] == "SIMULASI"
-        assert v["bank"]["verified"] is True
+        assert v["bank"]["verified"] == True
 
     def test_expired_nib_auto_rejected(self, applicant):
         aid = _create(applicant, expiry="2020-01-01")

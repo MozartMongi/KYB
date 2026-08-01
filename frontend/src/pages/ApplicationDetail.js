@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, formatApiErrorDetail, rp } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -20,16 +20,17 @@ export default function ApplicationDetail() {
   const [events, setEvents] = useState([]);
   const isOfficer = user?.role === "owner" || user?.role === "officer";
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const { data } = await api.get(`/applications/${id}`);
       setA(data);
       setDiditState(data.didit || null);
       setDirKyc(data.director_kyc || {});
-      try { const ev = await api.get(`/applications/${id}/didit/events`); setEvents(ev.data || []); } catch {}
-    } catch { toast.error("Gagal memuat"); }
-  };
-  useEffect(() => { load(); }, [id]);
+      try { const ev = await api.get(`/applications/${id}/didit/events`); setEvents(ev.data || []); }
+      catch (e) { console.error("Gagal memuat audit trail Didit", e); }
+    } catch (e) { console.error("Gagal memuat aplikasi", e); toast.error("Gagal memuat"); }
+  }, [id]);
+  useEffect(() => { load(); }, [load]);
 
   const createDidit = async () => {
     setBusy(true);
