@@ -70,3 +70,7 @@ Build a KYB (Know Your Business) tool for crypto exchange corporate/priority cus
 - **Branded PDF**: report.pdf now has a dark CorpScore letterhead (kop) with wordmark + accent + "RAHASIA/CONFIDENTIAL" and footer with page number.
 - Tested: iteration_6.json 47/47 pass (20 new + 27 regression). Visually verified PDF letterhead.
 - New env: DIDIT_KYC_WORKFLOW_ID (optional; falls back to DIDIT_WORKFLOW_ID for person KYC).
+
+## Didit DEMO/SIMULASI mode (2026-08-01)
+- Added `DIDIT_DEMO_MODE="true"` in backend/.env. When real DIDIT_API_KEY/WORKFLOW are absent, Didit runs in DEMO: `didit_create_session` returns a simulated session (session_id `demo_...`, url points back to the app, status In Progress, session_kind business/kyc) and `didit_get_decision` returns a simulated Approved decision (registry "Approved (SIMULASI)", risk LOW, 0 AML hits). Both flagged `demo:true`; UI shows an amber "SIMULASI" badge.
+- Demo is informational only — it does NOT auto-set the application decision (only real inbound webhooks do). Set real DIDIT_API_KEY + DIDIT_WORKFLOW_ID to auto-switch to live (demo bypassed when key present). Verified via curl for both KYB and per-UBO KYC sessions.

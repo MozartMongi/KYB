@@ -212,7 +212,7 @@ export default function ApplicationDetail() {
             </div>
             {diditState?.session_id ? (
               <div className="text-sm space-y-1">
-                <div>Status sesi: <b className="font-mono">{diditState.status || "Not Started"}</b> {diditState.session_kind && <span className="text-gray-400">· {diditState.session_kind}</span>}</div>
+                <div>Status sesi: <b className="font-mono">{diditState.status || "Not Started"}</b> {diditState.session_kind && <span className="text-gray-400">· {diditState.session_kind}</span>}{diditState.demo && <span className="ml-2 px-1.5 py-0.5 rounded-sm bg-amber-100 text-amber-700 border border-amber-300 text-[10px] font-semibold">SIMULASI</span>}</div>
                 {diditState.registry_status && <div>Registry: <span className="font-mono">{diditState.registry_status}</span> · {diditState.company_name}</div>}
                 {diditState.risk_level && <div>Risk Didit: <span className="font-mono">{diditState.risk_level}</span></div>}
                 {typeof diditState.aml_total_hits === "number" && <div>AML hits: <span className="font-mono">{diditState.aml_total_hits}</span></div>}

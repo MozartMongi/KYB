@@ -396,6 +396,10 @@ def didit_create_session(vendor_data: str, callback_path: str, workflow_id: str 
     wf = workflow_id or os.environ.get("DIDIT_WORKFLOW_ID")
     base = os.environ.get("DIDIT_BASE_URL", "https://verification.didit.me")
     if not (api_key and wf):
+        if os.environ.get("DIDIT_DEMO_MODE"):
+            return {"configured": True, "demo": True, "session_id": f"demo_{uuid.uuid4().hex[:12]}",
+                    "url": f"{FRONTEND_URL}{callback_path}", "status": "In Progress",
+                    "session_kind": "kyc" if ":dir:" in vendor_data else "business"}
         return {"configured": False}
     payload = {"workflow_id": wf, "vendor_data": vendor_data, "callback": f"{FRONTEND_URL}{callback_path}", "language": "id"}
     if metadata:
@@ -415,6 +419,9 @@ def didit_get_decision(session_id: str) -> dict:
     api_key = os.environ.get("DIDIT_API_KEY")
     base = os.environ.get("DIDIT_BASE_URL", "https://verification.didit.me")
     if not api_key:
+        if os.environ.get("DIDIT_DEMO_MODE"):
+            return {"configured": True, "demo": True, "session_id": session_id, "status": "Approved",
+                    "registry_status": "Approved (SIMULASI)", "company_name": None, "risk_level": "LOW", "aml_total_hits": 0}
         return {"configured": False}
     try:
         r = requests.get(f"{base}/v3/session/{session_id}/decision/", headers={"x-api-key": api_key, "Accept": "application/json"}, timeout=25)
