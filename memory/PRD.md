@@ -51,4 +51,15 @@ Build a KYB (Know Your Business) tool for crypto exchange corporate/priority cus
 - Backend: `didit_create_session()` / `didit_get_decision()` (env-gated), endpoints `POST /api/applications/{id}/didit/session` and `GET /api/applications/{id}/didit/decision`.
 - Frontend: "Verifikasi Didit (KYC/KYB)" card in case detail — create hosted session (opens verification URL), refresh decision (registry status, risk level, AML hits).
 - **ACTIVATION**: set `DIDIT_API_KEY` + `DIDIT_WORKFLOW_ID` (KYB workflow UUID) in backend/.env. Currently EMPTY → runs in "belum dikonfigurasi" mode. Use sandbox key (free) or live (500 checks/month free).
-- Bug fixes this iteration: bank name-check SIMULASI mismatch now works (holder removed from similarity max); NIB QR domain hardened (urlparse hostname == oss.go.id). Tested: iteration_4.json 15/15 pass.
+- Bug fixes: bank name-check SIMULASI mismatch now works; NIB QR domain hardened (urlparse hostname == oss.go.id). Tested: iteration_4.json 15/15 pass.
+
+## PDF Report + Didit Webhook Auto-Sync (2026-08-01)
+- **PDF export**: `GET /api/applications/{id}/report.pdf` (reportlab) — full risk report: profil perusahaan, breakdown skor kredit, validasi NIB+bank, screening hits, hasil Didit, keputusan. Frontend button "Ekspor PDF" (blob download) di halaman kasus. Ownership-guarded.
+- **Didit webhook auto-sync**: `POST /api/didit/webhook` — verifies X-Signature-V2/Simple HMAC (when DIDIT_WEBHOOK_SECRET set) + 300s window; `vendor_data` = application id; status Approved → auto-approve, Declined → auto-reject (decided_by "SYSTEM (Didit)"), guarded against overriding finalized apps.
+- Tested: iteration_5.json 27/27 pass (12 new + 15 regression).
+
+## Didit Activation Instructions (pending user keys)
+1. Console business.didit.me → API Keys → copy API key (Sandbox = free / Live = 500 checks/month free).
+2. Console → Workflows → create a KYB workflow → copy workflow_id (UUID).
+3. Console → API & Webhooks → Add destination, URL = `{REACT_APP_BACKEND_URL}/api/didit/webhook`, subscribe `status.updated`, copy secret_shared_key.
+4. Set in backend/.env: DIDIT_API_KEY, DIDIT_WORKFLOW_ID, DIDIT_WEBHOOK_SECRET → `sudo supervisorctl restart backend`.
