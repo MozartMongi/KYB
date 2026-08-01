@@ -7,6 +7,7 @@ import os
 import uuid
 import json
 import base64
+import time
 import logging
 import bcrypt
 import jwt
@@ -165,6 +166,7 @@ class CompanyInput(BaseModel):
     expected_monthly_volume_idr: float = 0.0
     source_of_funds: str = ""
     bank_name: str = ""
+    bank_code: str = ""
     bank_account_number: str = ""
     bank_account_holder: str = ""
     directors: List[Director] = []
@@ -207,27 +209,87 @@ def add_business_days(start: datetime, n: int) -> datetime:
             added += 1
     return d
 
-def validate_nib(company: dict) -> dict:
-    nib = (company.get("nib") or "").strip()
+def _clean_nib(nib: str) -> str:
+    return "".join(ch for ch in (nib or "") if ch.isdigit())
+
+def validate_nib_format(nib: str) -> bool:
+    return len(_clean_nib(nib)) == 13
+
+def nib_registry_lookup(nib: str) -> dict:
+    # Pluggable OSS/BKPM registry layer. Real provider active when NIB_REGISTRY_API_URL is configured.
+    url = os.environ.get("NIB_REGISTRY_API_URL")
+    if url:
+        try:
+            headers = {}
+            key = os.environ.get("NIB_REGISTRY_API_KEY")
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            r = requests.get(url, params={"nib": _clean_nib(nib)}, headers=headers, timeout=20)
+            r.raise_for_status()
+            return {"source": "registry", "found": True, **r.json()}
+        except Exception as e:
+            logger.error(f"NIB registry lookup failed: {e}")
+            return {"source": "registry", "found": False, "error": str(e)}
+    # Simulation — siap dihubungkan ke provider OSS/BKPM nyata via NIB_REGISTRY_API_URL
+    return {"source": "SIMULASI", "found": True, "status": "AKTIF", "note": "Registry OSS belum terhubung — data simulasi"}
+
+def decode_nib_qr(image_bytes: bytes, expected_nib: str = "") -> dict:
+    try:
+        import re
+        import cv2
+        import numpy as np
+        arr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return {"success": False, "reason": "Gambar tidak dapat dibaca"}
+        detector = cv2.QRCodeDetector()
+        data, points, _ = detector.detectAndDecode(img)
+        if not data:
+            return {"success": False, "reason": "QR code tidak terdeteksi pada dokumen"}
+        domain_valid = "oss.go.id" in data.lower()
+        m = re.search(r"\d{13}", data)
+        nib_in_qr = m.group(0) if m else ""
+        matches = (not expected_nib) or (nib_in_qr and _clean_nib(expected_nib) == nib_in_qr)
+        return {"success": True, "raw": data[:300], "domain_valid": domain_valid, "nib_in_qr": nib_in_qr, "matches_input": bool(matches)}
+    except Exception as e:
+        logger.error(f"QR decode failed: {e}")
+        return {"success": False, "reason": f"Gagal decode QR: {e}"}
+
+def validate_nib(company: dict, qr: dict = None) -> dict:
+    raw = company.get("nib") or ""
+    nib = _clean_nib(raw)
     exp = _parse_date(company.get("nib_expiry_date"))
     today = datetime.now(timezone.utc).date()
-    result = {"nib_present": bool(nib), "nib_expiry_date": company.get("nib_expiry_date", ""), "expired": False, "valid": True, "reason": ""}
+    fmt = validate_nib_format(raw)
+    result = {
+        "nib_present": bool(nib), "format_valid": fmt,
+        "nib_expiry_date": company.get("nib_expiry_date", ""),
+        "expired": False, "valid": True, "reason": "", "qr": qr, "registry": None,
+    }
     if not nib:
         result["valid"] = False
         result["reason"] = "NIB tidak diisi"
         return result
+    if not fmt:
+        result["valid"] = False
+        result["reason"] = "Format NIB tidak valid (harus 13 digit)"
+    result["registry"] = nib_registry_lookup(nib)
     if exp is None:
         result["valid"] = False
-        result["reason"] = "Tanggal masa berlaku NIB tidak valid / kosong"
-        return result
-    if exp < today:
+        if not result["reason"]:
+            result["reason"] = "Tanggal masa berlaku NIB tidak valid / kosong"
+    elif exp < today:
         result["expired"] = True
         result["valid"] = False
         result["reason"] = f"NIB telah kedaluwarsa pada {exp.isoformat()}"
+    if qr and qr.get("success") and not qr.get("matches_input", True):
+        result["valid"] = False
+        if not result["reason"]:
+            result["reason"] = "QR NIB tidak cocok dengan nomor NIB yang diinput"
     return result
 
 def _name_similarity(a: str, b: str) -> float:
-    a, b = a.lower().strip(), b.lower().strip()
+    a, b = (a or "").lower().strip(), (b or "").lower().strip()
     if not a or not b:
         return 0.0
     ta, tb = set(a.split()), set(b.split())
@@ -235,25 +297,95 @@ def _name_similarity(a: str, b: str) -> float:
         return 0.0
     return len(ta & tb) / max(len(ta), len(tb))
 
+# ---------------- BRIAPI Account Name Validation (name-check) ----------------
+_bri_token_cache = {"token": None, "exp": 0.0}
+
+def _bri_get_token():
+    cid = os.environ.get("BRI_CLIENT_ID")
+    csec = os.environ.get("BRI_CLIENT_SECRET")
+    base = os.environ.get("BRI_BASE_URL", "https://sandbox.partner.api.bri.co.id")
+    if not (cid and csec):
+        return None
+    now = time.time()
+    if _bri_token_cache["token"] and _bri_token_cache["exp"] > now + 30:
+        return _bri_token_cache["token"]
+    basic = base64.b64encode(f"{cid}:{csec}".encode()).decode()
+    r = requests.post(
+        f"{base}/oauth/client_credential/accesstoken", params={"grant_type": "client_credentials"},
+        headers={"Authorization": f"Basic {basic}", "Content-Type": "application/x-www-form-urlencoded"}, timeout=20,
+    )
+    r.raise_for_status()
+    d = r.json()
+    _bri_token_cache["token"] = d.get("access_token")
+    _bri_token_cache["exp"] = now + int(d.get("expires_in", 300) or 300)
+    return _bri_token_cache["token"]
+
+def _bri_signature(path: str, verb: str, token: str, timestamp: str, body: str, secret: str) -> str:
+    import hmac, hashlib
+    payload = f"path={path}&verb={verb}&token=Bearer {token}&timestamp={timestamp}&body={body}"
+    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+def bri_name_validation(bank_code: str, account_number: str) -> dict:
+    cid = os.environ.get("BRI_CLIENT_ID")
+    csec = os.environ.get("BRI_CLIENT_SECRET")
+    base = os.environ.get("BRI_BASE_URL", "https://sandbox.partner.api.bri.co.id")
+    if not (cid and csec):
+        return {"source": "SIMULASI", "configured": False, "success": False}
+    try:
+        token = _bri_get_token()
+        path = "/v1.0/validation-account/name-validate"
+        body = json.dumps({"bankCode": bank_code or "014", "accountNumber": account_number}, separators=(",", ":"))
+        n = datetime.now(timezone.utc)
+        ts = n.strftime("%Y-%m-%dT%H:%M:%S.") + f"{n.microsecond // 1000:03d}Z"
+        sig = _bri_signature(path, "POST", token, ts, body, csec)
+        r = requests.post(f"{base}{path}", data=body, headers={
+            "Authorization": f"Bearer {token}", "BRI-Timestamp": ts, "BRI-Signature": sig, "Content-Type": "application/json"}, timeout=25)
+        d = r.json()
+        ok = d.get("responseCode") == "0000"
+        return {"source": "BRIAPI", "configured": True, "success": ok, "response_code": d.get("responseCode"),
+                "response_description": d.get("responseDescription"), "account_name": (d.get("data") or {}).get("accountName", ""),
+                "error": d.get("errorDescription", "")}
+    except Exception as e:
+        logger.error(f"BRIAPI name validation failed: {e}")
+        return {"source": "BRIAPI", "configured": True, "success": False, "error": str(e)}
+
 def verify_bank(company: dict) -> dict:
+    bank_code = (company.get("bank_code") or "").strip()
     name = (company.get("bank_name") or "").strip()
     acc = (company.get("bank_account_number") or "").strip()
     holder = (company.get("bank_account_holder") or "").strip()
-    result = {"bank_name": name, "account_number_masked": ("•••• " + acc[-4:]) if len(acc) >= 4 else acc, "account_holder": holder, "verified": False, "name_match_score": 0, "status": "unverified", "note": ""}
-    if not (name and acc and holder):
-        result["note"] = "Data rekening tidak lengkap"
-        return result
     legal = company.get("legal_name", "")
     brand = company.get("brand_name", "")
-    sim = max(_name_similarity(holder, legal), _name_similarity(holder, brand))
+    result = {"bank_name": name, "bank_code": bank_code,
+              "account_number_masked": ("•••• " + acc[-4:]) if len(acc) >= 4 else acc,
+              "declared_holder": holder, "resolved_name": "", "verified": False,
+              "name_match_score": 0, "status": "unverified", "note": "", "source": "SIMULASI"}
+    if not acc:
+        result["note"] = "Nomor rekening tidak diisi"
+        return result
+    bri = bri_name_validation(bank_code, acc)
+    if bri.get("configured"):
+        result["source"] = "BRIAPI"
+        if not bri.get("success"):
+            result["status"] = "failed"
+            result["note"] = bri.get("error") or bri.get("response_description") or "Inquiry rekening gagal"
+            return result
+        resolved = bri.get("account_name", "") or ""
+    else:
+        # BRIAPI belum dikonfigurasi → mode simulasi memakai nama pemilik yang dideklarasikan
+        resolved = holder
+        result["note"] = "BRIAPI belum dikonfigurasi — verifikasi simulasi"
+    result["resolved_name"] = resolved
+    sim = max(_name_similarity(resolved, legal), _name_similarity(resolved, brand), _name_similarity(resolved, holder))
     result["name_match_score"] = round(sim * 100)
     if sim >= 0.5:
         result["verified"] = True
         result["status"] = "verified"
-        result["note"] = "Nama pemilik rekening cocok dengan nama perusahaan"
+        if not result["note"] or result["note"].startswith("BRIAPI belum"):
+            result["note"] = (result["note"] + " · " if result["note"] else "") + "Nama pemilik rekening cocok"
     else:
         result["status"] = "mismatch"
-        result["note"] = "Nama pemilik rekening tidak cocok dengan nama perusahaan — perlu peninjauan manual"
+        result["note"] = (result["note"] + " · " if result["note"] else "") + "Nama pemilik rekening tidak cocok dengan perusahaan"
     return result
 
 def screen_watchlist(company: dict):
@@ -536,6 +668,31 @@ async def download_document(app_id: str, doc_id: str, request: Request, auth: st
     content, ctype = get_object(doc["storage_path"])
     return Response(content=content, media_type=doc.get("content_type", ctype))
 
+@api_router.post("/applications/{app_id}/verify-nib")
+async def verify_nib_endpoint(app_id: str, file: UploadFile = File(None), user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    company = a["company"]
+    qr = None
+    if file is not None:
+        data = await file.read()
+        qr = decode_nib_qr(data, company.get("nib", ""))
+    nib_val = validate_nib(company, qr)
+    await db.applications.update_one({"id": app_id}, {"$set": {"nib_qr": qr, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"nib": nib_val, "qr": qr}
+
+@api_router.post("/applications/{app_id}/verify-bank")
+async def verify_bank_endpoint(app_id: str, user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    return {"bank": verify_bank(a["company"])}
+
 @api_router.post("/applications/{app_id}/submit")
 async def submit_application(app_id: str, user: dict = Depends(get_current_user)):
     a = await db.applications.find_one({"id": app_id}, {"_id": 0})
@@ -546,7 +703,7 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
     if a.get("status") in ("auto_rejected", "approved", "rejected"):
         raise HTTPException(status_code=400, detail="Aplikasi sudah difinalisasi dan tidak dapat dikirim ulang")
     company = a["company"]
-    nib_val = validate_nib(company)
+    nib_val = validate_nib(company, a.get("nib_qr"))
     bank_val = verify_bank(company)
     hits = screen_watchlist(company)
     rule = compute_rule_score(company, hits)

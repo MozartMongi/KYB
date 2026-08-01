@@ -8,7 +8,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send } from "lucide-react";
+import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send, Landmark, BadgeCheck } from "lucide-react";
+
+const BANKS = [
+  { code: "002", name: "Bank BRI" }, { code: "008", name: "Bank Mandiri" }, { code: "009", name: "Bank BNI" },
+  { code: "014", name: "Bank BCA" }, { code: "013", name: "Bank Permata" }, { code: "011", name: "Bank Danamon" },
+  { code: "022", name: "CIMB Niaga" }, { code: "200", name: "Bank BTN" }, { code: "451", name: "Bank Syariah Indonesia" },
+];
 
 const INDUSTRIES = ["crypto_exchange","money_services","forex","fintech","trading","real_estate","ecommerce","technology","consulting","retail","logistics","mining","manufacturing","other"];
 const STEPS = [
@@ -27,10 +33,13 @@ export default function NewApplication() {
     legal_name: "", brand_name: "", entity_type: "PT", nib: "", nib_expiry_date: "", npwp: "", deed_number: "",
     established_year: "", industry: "crypto_exchange", country: "Indonesia", address: "", website: "",
     annual_revenue_idr: "", paid_up_capital_idr: "", expected_monthly_volume_idr: "", source_of_funds: "",
-    bank_name: "", bank_account_number: "", bank_account_holder: "",
+    bank_name: "", bank_code: "002", bank_account_number: "", bank_account_holder: "",
     directors: [{ name: "", role: "Direktur Utama", id_number: "", is_pep: false, ownership_pct: "" }],
   });
   const [docs, setDocs] = useState([]);
+  const [nibCheck, setNibCheck] = useState(null);
+  const [bankCheck, setBankCheck] = useState(null);
+  const [verifying, setVerifying] = useState(false);
 
   const upd = (k) => (e) => setC({ ...c, [k]: e.target?.value ?? e });
   const updDir = (i, k, v) => { const d = [...c.directors]; d[i][k] = v; setC({ ...c, directors: d }); };
@@ -51,6 +60,33 @@ export default function NewApplication() {
     const { data } = await api.post("/applications", payload());
     setAppId(data.id);
     return data.id;
+  };
+
+  const verifyNib = async (file) => {
+    if (!file) return;
+    setVerifying(true);
+    try {
+      const id = await ensureApp();
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data } = await api.post(`/applications/${id}/verify-nib`, fd);
+      setNibCheck(data.nib);
+      if (data.nib?.qr?.success) toast.success(data.nib.qr.matches_input ? "QR NIB terverifikasi" : "QR terdeteksi, namun NIB tidak cocok");
+      else toast.error(data.nib?.qr?.reason || "QR tidak terdeteksi");
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setVerifying(false); }
+  };
+
+  const verifyBank = async () => {
+    if (!c.bank_account_number) { toast.error("Isi nomor rekening terlebih dahulu"); return; }
+    setVerifying(true);
+    try {
+      const id = await ensureApp();
+      const { data } = await api.post(`/applications/${id}/verify-bank`);
+      setBankCheck(data.bank);
+      toast[data.bank?.verified ? "success" : "error"](data.bank?.note || "Selesai");
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setVerifying(false); }
   };
 
   const next = async () => {
@@ -155,6 +191,26 @@ export default function NewApplication() {
               <Field label="Website"><Input value={c.website} onChange={upd("website")} className="rounded-sm" /></Field>
               <Field label="Negara"><Input value={c.country} onChange={upd("country")} className="rounded-sm" /></Field>
               <div className="sm:col-span-2"><Field label="Alamat Terdaftar"><Textarea value={c.address} onChange={upd("address")} className="rounded-sm" rows={2} /></Field></div>
+              <div className="sm:col-span-2 border border-dashed border-gray-300 rounded-sm p-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="text-sm font-medium flex items-center gap-2"><BadgeCheck className="w-4 h-4 text-blue-600" /> Verifikasi NIB via QR Code</div>
+                    <div className="text-xs text-gray-500">Unggah dokumen NIB (gambar) — sistem decode QR & cek keaslian domain resmi oss.go.id</div>
+                  </div>
+                  <label data-testid="verify-nib-upload" className="cursor-pointer text-sm px-3 py-2 border border-gray-300 rounded-sm hover:border-blue-500 transition-colors duration-200 flex items-center gap-2">
+                    <UploadCloud className="w-4 h-4" /> {verifying ? "Memproses…" : "Unggah & Verifikasi"}
+                    <input type="file" accept="image/*" className="hidden" onChange={(e) => verifyNib(e.target.files[0])} />
+                  </label>
+                </div>
+                {nibCheck && (
+                  <div data-testid="nib-check-result" className="mt-3 text-sm border-t border-gray-200 pt-3 space-y-1 font-mono text-xs">
+                    <div>QR: {nibCheck.qr?.success ? <span className="text-emerald-600">TERDETEKSI</span> : <span className="text-red-600">TIDAK ADA</span>}
+                      {nibCheck.qr?.success && <> · Domain oss.go.id: {nibCheck.qr.domain_valid ? "VALID" : "INVALID"} · NIB cocok: {nibCheck.qr.matches_input ? "YA" : "TIDAK"}</>}</div>
+                    <div>Registry OSS: {nibCheck.registry?.source} · {nibCheck.registry?.status || "-"}</div>
+                    {nibCheck.reason && <div className="text-red-600">{nibCheck.reason}</div>}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -191,9 +247,24 @@ export default function NewApplication() {
               <div className="sm:col-span-2 border-t border-gray-200 pt-4 mt-1">
                 <div className="font-head font-bold text-sm mb-3">Rekening Bank Perusahaan</div>
               </div>
-              <Field label="Nama Bank"><Input data-testid="bank-name-input" value={c.bank_name} onChange={upd("bank_name")} className="rounded-sm" placeholder="Bank Central Asia" /></Field>
+              <Field label="Bank">
+                <Select value={c.bank_code} onValueChange={(v) => { const b = BANKS.find((x) => x.code === v); setC({ ...c, bank_code: v, bank_name: b ? b.name : c.bank_name }); }}>
+                  <SelectTrigger className="rounded-sm" data-testid="bank-code-select"><SelectValue placeholder="Pilih bank" /></SelectTrigger>
+                  <SelectContent>{BANKS.map((b) => <SelectItem key={b.code} value={b.code}>{b.name} ({b.code})</SelectItem>)}</SelectContent>
+                </Select>
+              </Field>
               <Field label="Nomor Rekening"><Input data-testid="bank-account-number-input" value={c.bank_account_number} onChange={upd("bank_account_number")} className="rounded-sm font-mono" /></Field>
-              <div className="sm:col-span-2"><Field label="Nama Pemilik Rekening" hint="Diverifikasi otomatis terhadap nama perusahaan"><Input data-testid="bank-account-holder-input" value={c.bank_account_holder} onChange={upd("bank_account_holder")} className="rounded-sm" placeholder="PT Contoh Kripto Nusantara" /></Field></div>
+              <div className="sm:col-span-2"><Field label="Nama Pemilik Rekening" hint="Diverifikasi otomatis via BRIAPI Account Name Validation"><Input data-testid="bank-account-holder-input" value={c.bank_account_holder} onChange={upd("bank_account_holder")} className="rounded-sm" placeholder="PT Contoh Kripto Nusantara" /></Field></div>
+              <div className="sm:col-span-2">
+                <Button data-testid="verify-bank-button" type="button" variant="outline" onClick={verifyBank} disabled={verifying} className="rounded-sm gap-2"><Landmark className="w-4 h-4" /> {verifying ? "Memverifikasi…" : "Verifikasi Rekening (Name Check)"}</Button>
+                {bankCheck && (
+                  <div data-testid="bank-check-result" className={`mt-3 text-sm border rounded-sm p-3 ${bankCheck.verified ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+                    <div>Status: <b>{(bankCheck.status || "").toUpperCase()}</b> · Sumber: <span className="font-mono">{bankCheck.source}</span></div>
+                    <div>Nama sesuai bank: <span className="font-mono">{bankCheck.resolved_name || "—"}</span> · Kecocokan: <span className="font-mono">{bankCheck.name_match_score}%</span></div>
+                    <div className="text-xs mt-1">{bankCheck.note}</div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 3 testing of NIB QR-code verification (oss.go.id decode + registry SIMULASI) and BRIAPI bank name-check (SIMULASI). Backend: added /app/backend/tests/test_nib_qr_bank.py — 12/13 new tests pass. Frontend Playwright: verified verify-nib-upload → nib-check-result shows 'QR: TERDETEKSI · Domain oss.go.id: VALID · NIB cocok: YA · Registry OSS: SIMULASI · AKTIF' and bank-check-result shows 'Status: VERIFIED · Sumber: SIMULASI · Nama sesuai bank: <legal> · Kecocokan: 100%'. Toasts 'QR NIB terverifikasi' and 'Nama pemilik rekening cocok' visible. REGRESSION FOUND: bank verify SIMULASI mode cannot produce mismatch because verify_bank() computes sim = max(sim(resolved,legal), sim(resolved,brand), sim(resolved,holder)) and in SIMULASI mode resolved_name = holder, so sim(holder,holder)=1.0 always → verified=true regardless of legal_name. This breaks the intended SIMULASI check of comparing declared holder to company name, and also causes iter2's existing test_bank_verification_mismatch to fail. Fix: remove holder from the max() (or only compare resolved vs {legal, brand}).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "verify_bank() + POST /api/applications/{id}/verify-bank + submit_application", "issue": "SIMULASI bank name-check always returns verified=true. In SIMULASI branch, resolved_name is set to declared holder, and _name_similarity(resolved, holder) is included in max() → always 1.0. Mismatch scenario (holder unrelated to legal_name) is unreachable, breaking the stated behaviour 'SIMULASI mode comparing declared account holder name to the company name'. Also fails prior iter2 test TestValidNibSlaQueue::test_bank_verification_mismatch (previously passing).", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_nib_qr_bank.py",
+    "/app/backend/tests/test_nib_bank_sla.py",
+    "/app/test_reports/pytest/nib_qr_bank.xml"
+  ],
+  "action_items": [
+    "server.py verify_bank(): change 'sim = max(_name_similarity(resolved, legal), _name_similarity(resolved, brand), _name_similarity(resolved, holder))' to 'sim = max(_name_similarity(resolved, legal), _name_similarity(resolved, brand))' so SIMULASI (where resolved==holder) meaningfully compares holder-vs-company. Re-run iter2 test test_bank_verification_mismatch to confirm; add a new test where legal='PT ABC' and holder='John Doe' expects verified=false."
+  ],
+  "critical_code_review_comments": [
+    "verify_bank max() logic (server.py:379) — includes holder in similarity max, making SIMULASI mismatch impossible (see critical bug).",
+    "decode_nib_qr correctly checks 'oss.go.id' as substring — accepts subdomains 'evil-oss.go.id.attacker.com' would also pass since it's substring. Consider urlparse(data).hostname.endswith('oss.go.id') for stricter domain validation. Currently a QR encoding 'https://oss.go.id.malicious.example' would set domain_valid=true.",
+    "nib_registry_lookup SIMULASI always returns status=AKTIF — real integration will require honoring returned {status} in validate_nib (currently registry result is stored but not consulted for expiry/AKTIF/CABUT). validate_nib should treat registry.status != 'AKTIF' as invalid when real registry is wired.",
+    "verify_nib_endpoint RBAC condition: `if user.role not in (owner,officer) and app.applicant_user_id != user.user_id` — logic is OK; verified via TestVerifyNibQR::test_verify_nib_rbac_other_applicant (403).",
+    "submit_application now blocks resubmission of finalised (auto_rejected/approved/rejected) with 400 — good, this addresses iter2 code-review comment.",
+    "verify_bank name-match threshold still 0.5 (token overlap) — flagged in iter2, unchanged in iter3.",
+    "BRIAPI signature timestamp format uses microseconds//1000; ensure BRI-Timestamp format required by BRI is 'YYYY-MM-DDTHH:MM:SS.sssZ' (looks correct); no way to test without creds."
+  ],
+  "updated_files": ["/app/backend/tests/test_nib_qr_bank.py", "/app/test_reports/iteration_3.json"],
+  "success_rate": {"backend": "92% (12/13 new tests; the 1 failure exposes the mismatch bug above, not a test defect)", "frontend": "100% for verify-nib-upload → nib-check-result and verify-bank-button → bank-check-result flows tested end-to-end with real QR PNG upload"},
+  "test_credentials": "Owner: rizkyjo@pegasusexchange.id / Pegasus2026! (confirmed working). BRI_CLIENT_ID/SECRET intentionally empty (SIMULASI); NIB_REGISTRY_API_URL empty (SIMULASI). /app/memory/test_credentials.md not present — flagging for future runs.",
+  "seed_data_creation": "Multiple TEST_ prefixed applications created via /api/applications by new test_ registered applicants. Not cleaned up (volume negligible).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New file /app/backend/tests/test_nib_qr_bank.py covers: TestVerifyNibQR (matching QR / mismatch / mismatch→auto_rejected submit / non-oss domain → domain_valid=false / format-invalid NIB / auth required 401 / cross-applicant RBAC 403), TestVerifyBank (SIMULASI match / SIMULASI mismatch [FAILING due to bug above] / auth 401 / RBAC 403), TestSubmitIntegration (full valid flow with QR → under_review + persisted qr/registry/bank in validation card via owner GET / finalised cannot resubmit → 400). Frontend: 'Selanjutnya' does NOT exist — button text is 'Lanjut' with data-testid='next-step-button'. Also submit_application button data-testid='submit-application-button' on step 4. Bank verify result testid renders EXACT string 'Status: VERIFIED · Sumber: SIMULASI · Nama sesuai bank: <name> · Kecocokan: 100% ... Nama pemilik rekening cocok'.",
+  "rca of the issue": "verify_bank() SIMULASI mismatch bug — RCA: In SIMULASI branch (line ~376), code assigns `resolved = holder` because BRIAPI is not configured. Then similarity is computed as sim = max(sim(resolved,legal), sim(resolved,brand), sim(resolved,holder)). The third term is sim(holder,holder) = 1.0 always, making the max always ≥ 0.5, so status is always 'verified'. Reproduction: legal_name='TEST_PT Anything', bank_account_holder='Totally Unrelated Zzz' → verify_bank returns verified=true, name_match_score=100. Expected: verified=false, name_match_score < 50, status='mismatch'. Mitigation: drop 'holder' from the max() in the SIMULASI code path — or equivalently, only include holder when BRIAPI actually returned an independent account_name (i.e., always compare resolved-vs-company for the source-agnostic score)."
+}

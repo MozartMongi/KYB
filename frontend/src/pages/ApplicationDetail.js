@@ -106,6 +106,12 @@ export default function ApplicationDetail() {
                     </span>
                   </div>
                   <div className="text-xs text-gray-500 mt-1">Masa berlaku: <span className="font-mono">{val.nib?.nib_expiry_date || "—"}</span></div>
+                  {val.nib?.qr && val.nib.qr.success && (
+                    <div className="text-xs text-gray-500 mt-1">QR: <span className="font-mono">{val.nib.qr.domain_valid ? "oss.go.id ✓" : "domain tidak valid"}</span> · NIB {val.nib.qr.matches_input ? "cocok" : "tidak cocok"}</div>
+                  )}
+                  {val.nib?.registry && (
+                    <div className="text-xs text-gray-500">Registry: <span className="font-mono">{val.nib.registry.source} · {val.nib.registry.status || "-"}</span></div>
+                  )}
                   {val.nib?.reason && <div className="text-xs text-red-600 mt-1">{val.nib.reason}</div>}
                 </div>
                 <div className="border border-gray-200 rounded-sm p-4" data-testid="bank-validation">
@@ -115,6 +121,7 @@ export default function ApplicationDetail() {
                     <span className={`font-mono text-sm font-semibold ${val.bank?.verified ? "text-emerald-700" : "text-amber-700"}`}>{(val.bank?.status || "unverified").toUpperCase()}</span>
                   </div>
                   <div className="text-xs text-gray-500 mt-1">{val.bank?.bank_name || "—"} · <span className="font-mono">{val.bank?.account_number_masked || "—"}</span></div>
+                  <div className="text-xs text-gray-500">Sumber: <span className="font-mono">{val.bank?.source || "—"}</span>{val.bank?.resolved_name ? <> · Nama bank: <span className="font-mono">{val.bank.resolved_name}</span></> : null}</div>
                   <div className="text-xs text-gray-500">Kecocokan nama: <span className="font-mono">{val.bank?.name_match_score ?? 0}%</span></div>
                   {val.bank?.note && <div className="text-xs text-gray-500 mt-1">{val.bank.note}</div>}
                 </div>
