@@ -152,6 +152,7 @@ class CompanyInput(BaseModel):
     brand_name: str = ""
     entity_type: str = "PT"
     nib: str = ""
+    nib_expiry_date: str = ""  # ISO date YYYY-MM-DD, masa berlaku NIB
     npwp: str = ""
     deed_number: str = ""
     established_year: Optional[int] = None
@@ -163,6 +164,9 @@ class CompanyInput(BaseModel):
     paid_up_capital_idr: float = 0.0
     expected_monthly_volume_idr: float = 0.0
     source_of_funds: str = ""
+    bank_name: str = ""
+    bank_account_number: str = ""
+    bank_account_holder: str = ""
     directors: List[Director] = []
 
 class DecisionInput(BaseModel):
@@ -184,6 +188,73 @@ MOCK_WATCHLIST = [
     {"name": "Global Shell Holdings", "type": "ADVERSE_MEDIA", "list": "Adverse Media - Fraud"},
     {"name": "Siti Nurhaliza Wijaya", "type": "PEP", "list": "Domestic PEP - Family"},
 ]
+
+def _parse_date(s: str):
+    if not s:
+        return None
+    try:
+        s = s.strip().split("T")[0]
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def add_business_days(start: datetime, n: int) -> datetime:
+    d = start
+    added = 0
+    while added < n:
+        d = d + timedelta(days=1)
+        if d.weekday() < 5:  # Mon-Fri
+            added += 1
+    return d
+
+def validate_nib(company: dict) -> dict:
+    nib = (company.get("nib") or "").strip()
+    exp = _parse_date(company.get("nib_expiry_date"))
+    today = datetime.now(timezone.utc).date()
+    result = {"nib_present": bool(nib), "nib_expiry_date": company.get("nib_expiry_date", ""), "expired": False, "valid": True, "reason": ""}
+    if not nib:
+        result["valid"] = False
+        result["reason"] = "NIB tidak diisi"
+        return result
+    if exp is None:
+        result["valid"] = False
+        result["reason"] = "Tanggal masa berlaku NIB tidak valid / kosong"
+        return result
+    if exp < today:
+        result["expired"] = True
+        result["valid"] = False
+        result["reason"] = f"NIB telah kedaluwarsa pada {exp.isoformat()}"
+    return result
+
+def _name_similarity(a: str, b: str) -> float:
+    a, b = a.lower().strip(), b.lower().strip()
+    if not a or not b:
+        return 0.0
+    ta, tb = set(a.split()), set(b.split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / max(len(ta), len(tb))
+
+def verify_bank(company: dict) -> dict:
+    name = (company.get("bank_name") or "").strip()
+    acc = (company.get("bank_account_number") or "").strip()
+    holder = (company.get("bank_account_holder") or "").strip()
+    result = {"bank_name": name, "account_number_masked": ("•••• " + acc[-4:]) if len(acc) >= 4 else acc, "account_holder": holder, "verified": False, "name_match_score": 0, "status": "unverified", "note": ""}
+    if not (name and acc and holder):
+        result["note"] = "Data rekening tidak lengkap"
+        return result
+    legal = company.get("legal_name", "")
+    brand = company.get("brand_name", "")
+    sim = max(_name_similarity(holder, legal), _name_similarity(holder, brand))
+    result["name_match_score"] = round(sim * 100)
+    if sim >= 0.5:
+        result["verified"] = True
+        result["status"] = "verified"
+        result["note"] = "Nama pemilik rekening cocok dengan nama perusahaan"
+    else:
+        result["status"] = "mismatch"
+        result["note"] = "Nama pemilik rekening tidak cocok dengan nama perusahaan — perlu peninjauan manual"
+    return result
 
 def screen_watchlist(company: dict):
     hits = []
@@ -473,6 +544,8 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
     if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Akses ditolak")
     company = a["company"]
+    nib_val = validate_nib(company)
+    bank_val = verify_bank(company)
     hits = screen_watchlist(company)
     rule = compute_rule_score(company, hits)
     ai = await ai_risk_review(company, rule, hits)
@@ -481,10 +554,26 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
         **rule, "ai_adjustment": int(ai.get("risk_adjustment", 0) or 0),
         "final_score": final, "risk_level": risk_level_from_score(final),
     }
-    await db.applications.update_one({"id": app_id}, {"$set": {
+    now = datetime.now(timezone.utc)
+    validation = {"nib": nib_val, "bank": bank_val}
+    update = {
         "status": "under_review", "screening_hits": hits, "score": score, "ai_review": ai,
-        "submitted_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat(),
-    }})
+        "validation": validation, "submitted_at": now.isoformat(), "updated_at": now.isoformat(),
+        "sla_due_at": None, "sla_days": None, "auto_reject_reason": None,
+    }
+    # Auto-rejection: NIB expired / invalid masa berlaku
+    if nib_val["expired"] or not nib_val["valid"]:
+        update["status"] = "auto_rejected"
+        update["decision"] = "auto_rejected"
+        update["auto_reject_reason"] = nib_val["reason"]
+        update["decided_by"] = "SYSTEM (validasi otomatis)"
+        update["decided_at"] = now.isoformat()
+    else:
+        # Valid → antrean peninjauan manual dengan SLA 3 hari kerja
+        sla_due = add_business_days(now, 3)
+        update["sla_due_at"] = sla_due.isoformat()
+        update["sla_days"] = 3
+    await db.applications.update_one({"id": app_id}, {"$set": update})
     return await db.applications.find_one({"id": app_id}, {"_id": 0})
 
 @api_router.post("/applications/{app_id}/decision")

@@ -6,7 +6,7 @@ import { RiskBadge, StatusBadge, ScoreGauge, FactorBar } from "@/components/kyb"
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Sparkles, CheckCircle2, XCircle, Building2, Users, FileText } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Sparkles, CheckCircle2, XCircle, Building2, Users, FileText, BadgeCheck, CalendarClock, Ban } from "lucide-react";
 
 export default function ApplicationDetail() {
   const { id } = useParams();
@@ -34,6 +34,9 @@ export default function ApplicationDetail() {
   const co = a.company || {};
   const score = a.score;
   const ai = a.ai_review;
+  const val = a.validation;
+  const slaDue = a.sla_due_at ? new Date(a.sla_due_at) : null;
+  const overdue = slaDue && new Date() > slaDue && a.status === "under_review";
 
   return (
     <div className="animate-fade-up">
@@ -79,6 +82,52 @@ export default function ApplicationDetail() {
 
         {/* Middle+Right: details */}
         <div className="lg:col-span-2 space-y-6">
+          {a.status === "auto_rejected" && (
+            <div data-testid="auto-reject-banner" className="bg-red-100 border border-red-400 rounded-sm p-4 flex items-start gap-3">
+              <Ban className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-head font-bold text-red-800">AUTO-REJECTED oleh sistem</div>
+                <div className="text-sm text-red-700">{a.auto_reject_reason || "Validasi otomatis gagal"}</div>
+              </div>
+            </div>
+          )}
+
+          {/* System validation */}
+          {val && (
+            <div className="bg-white border border-gray-200 rounded-sm p-6" data-testid="validation-card">
+              <h2 className="font-head font-bold flex items-center gap-2 mb-4"><BadgeCheck className="w-4 h-4 text-blue-600" /> Validasi Sistem</h2>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="border border-gray-200 rounded-sm p-4" data-testid="nib-validation">
+                  <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi NIB</div>
+                  <div className="flex items-center gap-2">
+                    {val.nib?.valid ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Ban className="w-4 h-4 text-red-600" />}
+                    <span className={`font-mono text-sm font-semibold ${val.nib?.valid ? "text-emerald-700" : "text-red-700"}`}>
+                      {val.nib?.valid ? "VALID" : val.nib?.expired ? "KEDALUWARSA" : "TIDAK VALID"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">Masa berlaku: <span className="font-mono">{val.nib?.nib_expiry_date || "—"}</span></div>
+                  {val.nib?.reason && <div className="text-xs text-red-600 mt-1">{val.nib.reason}</div>}
+                </div>
+                <div className="border border-gray-200 rounded-sm p-4" data-testid="bank-validation">
+                  <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi Rekening Bank</div>
+                  <div className="flex items-center gap-2">
+                    {val.bank?.verified ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <ShieldAlert className="w-4 h-4 text-amber-600" />}
+                    <span className={`font-mono text-sm font-semibold ${val.bank?.verified ? "text-emerald-700" : "text-amber-700"}`}>{(val.bank?.status || "unverified").toUpperCase()}</span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">{val.bank?.bank_name || "—"} · <span className="font-mono">{val.bank?.account_number_masked || "—"}</span></div>
+                  <div className="text-xs text-gray-500">Kecocokan nama: <span className="font-mono">{val.bank?.name_match_score ?? 0}%</span></div>
+                  {val.bank?.note && <div className="text-xs text-gray-500 mt-1">{val.bank.note}</div>}
+                </div>
+                {a.sla_due_at && a.status === "under_review" && (
+                  <div data-testid="sla-banner" className={`sm:col-span-2 flex items-center gap-2 rounded-sm p-3 border ${overdue ? "bg-red-50 border-red-200 text-red-700" : "bg-blue-50 border-blue-200 text-blue-700"}`}>
+                    <CalendarClock className="w-4 h-4" />
+                    <span className="text-sm">Target SLA peninjauan manual: <b className="font-mono">{slaDue.toLocaleDateString("id-ID")}</b> (3 hari kerja){overdue ? " — TERLAMBAT" : ""}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* AI review */}
           {ai && (
             <div className="bg-white border border-gray-200 rounded-sm p-6">
@@ -171,7 +220,7 @@ export default function ApplicationDetail() {
             </div>
           )}
 
-          {a.decision && (
+          {a.decision && a.status !== "auto_rejected" && (
             <div className={`rounded-sm p-4 text-sm border ${a.decision === "approved" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-800"}`}>
               Diputuskan <b>{a.decision === "approved" ? "DISETUJUI" : "DITOLAK"}</b> oleh {a.decided_by}. {a.decision_note && `— "${a.decision_note}"`}
             </div>

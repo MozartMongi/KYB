@@ -24,9 +24,10 @@ export default function NewApplication() {
   const [appId, setAppId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [c, setC] = useState({
-    legal_name: "", brand_name: "", entity_type: "PT", nib: "", npwp: "", deed_number: "",
+    legal_name: "", brand_name: "", entity_type: "PT", nib: "", nib_expiry_date: "", npwp: "", deed_number: "",
     established_year: "", industry: "crypto_exchange", country: "Indonesia", address: "", website: "",
     annual_revenue_idr: "", paid_up_capital_idr: "", expected_monthly_volume_idr: "", source_of_funds: "",
+    bank_name: "", bank_account_number: "", bank_account_holder: "",
     directors: [{ name: "", role: "Direktur Utama", id_number: "", is_pep: false, ownership_pct: "" }],
   });
   const [docs, setDocs] = useState([]);
@@ -147,6 +148,7 @@ export default function NewApplication() {
                 </Select>
               </Field>
               <Field label="NIB"><Input data-testid="nib-input" value={c.nib} onChange={upd("nib")} className="rounded-sm font-mono" placeholder="13 digit" /></Field>
+              <Field label="Masa Berlaku NIB *" hint="Sistem auto-reject bila kedaluwarsa"><Input data-testid="nib-expiry-input" type="date" value={c.nib_expiry_date} onChange={upd("nib_expiry_date")} className="rounded-sm font-mono" /></Field>
               <Field label="NPWP"><Input data-testid="npwp-input" value={c.npwp} onChange={upd("npwp")} className="rounded-sm font-mono" /></Field>
               <Field label="No. Akta Pendirian"><Input value={c.deed_number} onChange={upd("deed_number")} className="rounded-sm font-mono" /></Field>
               <Field label="Tahun Berdiri"><Input type="number" value={c.established_year} onChange={upd("established_year")} className="rounded-sm font-mono" placeholder="2019" /></Field>
@@ -186,6 +188,12 @@ export default function NewApplication() {
               <Field label="Modal Disetor (IDR)" hint={rp(c.paid_up_capital_idr)}><Input data-testid="capital-input" type="number" value={c.paid_up_capital_idr} onChange={upd("paid_up_capital_idr")} className="rounded-sm font-mono" /></Field>
               <Field label="Estimasi Volume Bulanan (IDR)" hint={rp(c.expected_monthly_volume_idr)}><Input type="number" value={c.expected_monthly_volume_idr} onChange={upd("expected_monthly_volume_idr")} className="rounded-sm font-mono" /></Field>
               <div className="sm:col-span-2"><Field label="Sumber Dana"><Textarea value={c.source_of_funds} onChange={upd("source_of_funds")} className="rounded-sm" rows={2} placeholder="Contoh: modal pemegang saham, pendapatan operasional trading" /></Field></div>
+              <div className="sm:col-span-2 border-t border-gray-200 pt-4 mt-1">
+                <div className="font-head font-bold text-sm mb-3">Rekening Bank Perusahaan</div>
+              </div>
+              <Field label="Nama Bank"><Input data-testid="bank-name-input" value={c.bank_name} onChange={upd("bank_name")} className="rounded-sm" placeholder="Bank Central Asia" /></Field>
+              <Field label="Nomor Rekening"><Input data-testid="bank-account-number-input" value={c.bank_account_number} onChange={upd("bank_account_number")} className="rounded-sm font-mono" /></Field>
+              <div className="sm:col-span-2"><Field label="Nama Pemilik Rekening" hint="Diverifikasi otomatis terhadap nama perusahaan"><Input data-testid="bank-account-holder-input" value={c.bank_account_holder} onChange={upd("bank_account_holder")} className="rounded-sm" placeholder="PT Contoh Kripto Nusantara" /></Field></div>
             </div>
           )}
 

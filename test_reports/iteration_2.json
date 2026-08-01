@@ -1,0 +1,26 @@
+{
+  "summary": "Incremental testing of NEW NIB expiry auto-reject + bank verification + SLA queue features on CorpScore KYB. Backend: 8/8 new tests pass in /app/backend/tests/test_nib_bank_sla.py (expired NIB → auto_rejected with 'kedaluwarsa' reason, missing expiry also auto-rejects, no SLA on auto-rejected; valid NIB → under_review with sla_days=3 and sla_due_at 3 business days ahead (weekday only), bank name-match verified/mismatch, persistence via GET, unauthenticated document download → 401). Frontend: Playwright verified end-to-end via owner-side navigation (Dashboard → row click → detail): auto-reject-banner, validation-card, nib-validation (KEDALUWARSA), bank-validation (VERIFIED + masked + name-match%), StatusBadge AUTO-REJECTED, Dashboard SLA column header + AUTO-REJECTED badge, owner sees approve/reject only on under_review, NO decision buttons on auto_rejected. Google button present with correct emergentagent redirect. Screenshot confirms full UI render.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_nib_bank_sla.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/nib_bank_sla.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py download_document allows access-by-doc-id if user is authenticated and owns app OR is officer — access control is correct (was flagged as loose in iter1 but re-review shows ownership + officer check is present).",
+    "submit_application does not block re-submission of an already auto_rejected or approved application — POST /applications/{id}/submit will silently re-run screening and can flip status. Consider guarding with `if a['status'] in ('auto_rejected','approved','rejected'): raise 400`.",
+    "validate_nib only checks presence + expiry; does not validate 13-digit format. Currently 'nib':'999' passes as long as expiry is future — acceptable for MVP but flag if regulator requires format validation.",
+    "verify_bank name-match uses simple token overlap (>=0.5) which is lenient — a company 'PT Contoh Nusantara' holder 'John Nusantara' would score 0.5 and be VERIFIED. Consider tightening threshold or using proper fuzzy match.",
+    "add_business_days uses Mon-Fri only and ignores Indonesian public holidays — acceptable for MVP; note in PRD if BI/OJK holiday calendar is required."
+  ],
+  "updated_files": ["/app/backend/tests/test_nib_bank_sla.py"],
+  "success_rate": {"backend": "100% (8/8 new + previous suite unaffected)", "frontend": "100% verified via owner-side flow + screenshot; applicant-side wait_for_url selector had a test-script bug (matched /applications/new URL prematurely) — not a product defect, confirmed by owner viewing same records showing all required testids"},
+  "test_credentials": "Owner: rizkyjo@pegasusexchange.id / Pegasus2026! (seeded). Applicants registered ad-hoc via UI.",
+  "seed_data_creation": "Multiple TEST_ prefixed applications created (expired + valid NIB variants + bank mismatch). Not cleaned up (volume negligible).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New feature test file /app/backend/tests/test_nib_bank_sla.py extends coverage: TestAutoReject (3 tests), TestValidNibSlaQueue (4 tests: sla_due_at is a business-day count and lands Mon-Fri; bank name-match verified >=50%, mismatch <50%, masked account_number_masked shows •••• + last-4), TestDownloadAuth (401 unauth). Frontend testids validated end-to-end: auto-reject-banner, validation-card, nib-validation, bank-validation, sla-banner, application-row-{id}, Dashboard SLA column. Google login only redirect URL tested (auth.emergentagent.com), OAuth not completed.",
+  "rca of the issue": "N/A — no defects found. Note for future test-script hygiene: wait_for_url('**/applications/**') matches BOTH /applications/new and /applications/{id} — after clicking submit-application-button on /applications/new the promise resolves immediately without waiting for redirect. Use wait_for_url(lambda u: '/applications/' in u and '/new' not in u) or wait_for_selector('[data-testid=\"validation-card\"]') instead."
+}

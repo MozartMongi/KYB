@@ -18,6 +18,7 @@ export function StatusBadge({ status }) {
     under_review: { c: "text-blue-700 border-blue-300 bg-blue-50", t: "REVIEW" },
     approved: { c: "text-emerald-700 border-emerald-300 bg-emerald-50", t: "DISETUJUI" },
     rejected: { c: "text-red-700 border-red-300 bg-red-50", t: "DITOLAK" },
+    auto_rejected: { c: "text-red-800 border-red-400 bg-red-100", t: "AUTO-REJECTED" },
   };
   const s = map[status] || map.draft;
   return <span className={`font-mono text-[11px] font-semibold px-2 py-0.5 border rounded-sm ${s.c}`}>{s.t}</span>;

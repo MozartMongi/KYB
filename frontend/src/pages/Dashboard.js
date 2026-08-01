@@ -74,6 +74,7 @@ export default function Dashboard() {
                   <th className="px-5 py-3 font-medium">Industri</th>
                   <th className="px-5 py-3 font-medium">Skor</th>
                   <th className="px-5 py-3 font-medium">Risiko</th>
+                  <th className="px-5 py-3 font-medium">SLA</th>
                   <th className="px-5 py-3 font-medium">Status</th>
                 </tr>
               </thead>
@@ -95,6 +96,13 @@ export default function Dashboard() {
                     <td className="px-5 py-3.5 text-gray-600">{a.company?.industry}</td>
                     <td className="px-5 py-3.5 font-mono font-semibold">{a.score ? `${a.score.final_score}` : "—"}</td>
                     <td className="px-5 py-3.5">{a.score ? <RiskBadge level={a.score.risk_level} /> : <span className="text-gray-300">—</span>}</td>
+                    <td className="px-5 py-3.5 font-mono text-xs">
+                      {a.sla_due_at && a.status === "under_review" ? (
+                        <span className={new Date() > new Date(a.sla_due_at) ? "text-red-600 font-semibold" : "text-blue-600"}>
+                          {new Date(a.sla_due_at).toLocaleDateString("id-ID")}
+                        </span>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-5 py-3.5"><StatusBadge status={a.status} /></td>
                   </tr>
                 ))}
