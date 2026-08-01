@@ -27,7 +27,11 @@ Build a KYB (Know Your Business) tool for crypto exchange corporate/priority cus
 - ✅ Mock watchlist screening (PEP self-declared + sanction/PEP/adverse-media name matching).
 - ✅ Compliance dashboard (stats + review queue) and case detail (score, factors, AI analysis, screening hits, profile, directors, documents, decision).
 - ✅ Object storage document upload + access-controlled download.
-- ✅ Tested: backend 15/16 (1 test-infra artifact), frontend 100% of critical flows.
+- ✅ NIB verification with auto-rejection when expiry date has passed (status `auto_rejected` + reason).
+- ✅ Bank account verification (name-match vs company name, masked account number).
+- ✅ Manual admin review queue with 3 business-day SLA target (`sla_due_at`), SLA column + overdue highlight on dashboard.
+- ✅ Re-submission guard on finalized applications (auto_rejected/approved/rejected → 400).
+- ✅ Tested: iteration_1 (core) + iteration_2 (NIB/bank/SLA/auto-reject) both 100% on new suites.
 
 ## MOCKED
 - **AML/PEP/sanctions watchlist screening** uses an in-code `MOCK_WATCHLIST` (not a real screening provider). Real provider integration is a P1 backlog item.

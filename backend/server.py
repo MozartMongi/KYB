@@ -543,6 +543,8 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
         raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
     if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Akses ditolak")
+    if a.get("status") in ("auto_rejected", "approved", "rejected"):
+        raise HTTPException(status_code=400, detail="Aplikasi sudah difinalisasi dan tidak dapat dikirim ulang")
     company = a["company"]
     nib_val = validate_nib(company)
     bank_val = verify_bank(company)
