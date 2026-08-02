@@ -79,6 +79,10 @@ let webpackConfig = {
       },
     },
   },
+  // Project is JS-only; ForkTsChecker + mismatched ajv breaks CRA builds on Vercel.
+  typescript: {
+    enableTypeChecking: false,
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
@@ -97,6 +101,11 @@ let webpackConfig = {
             '**/public/**',
         ],
       };
+
+      // Belt-and-suspenders: remove ForkTsChecker if still present
+      webpackConfig.plugins = (webpackConfig.plugins || []).filter(
+        (plugin) => plugin?.constructor?.name !== "ForkTsCheckerWebpackPlugin"
+      );
 
       // Add health check plugin to webpack if enabled
       if (config.enableHealthCheck && healthPluginInstance) {
