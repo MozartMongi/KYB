@@ -13,17 +13,40 @@ export default function AuthCallback() {
   useEffect(() => {
     if (processed.current) return;
     processed.current = true;
+
+    const query = new URLSearchParams(location.search || window.location.search);
+    const code = query.get("code");
+    const oauthError = query.get("error");
+
+    // Legacy Emergent hash-based session (session_id in URL fragment)
     const hash = location.hash || window.location.hash;
-    const sid = new URLSearchParams(hash.replace("#", "")).get("session_id");
-    if (!sid) { navigate("/login"); return; }
+    const sessionId = new URLSearchParams(hash.replace(/^#/, "")).get("session_id");
+
+    if (oauthError) {
+      navigate("/login", { replace: true });
+      return;
+    }
+
     (async () => {
       try {
-        const { data } = await api.post("/auth/session", { session_id: sid });
-        setUser(data);
-        window.history.replaceState(null, "", "/dashboard");
-        navigate("/dashboard", { replace: true });
+        if (code) {
+          const redirectUri = `${window.location.origin}/auth/callback`;
+          const { data } = await api.post("/auth/google", { code, redirect_uri: redirectUri });
+          setUser(data);
+          window.history.replaceState(null, "", "/dashboard");
+          navigate("/dashboard", { replace: true });
+          return;
+        }
+        if (sessionId) {
+          const { data } = await api.post("/auth/session", { session_id: sessionId });
+          setUser(data);
+          window.history.replaceState(null, "", "/dashboard");
+          navigate("/dashboard", { replace: true });
+          return;
+        }
+        navigate("/login", { replace: true });
       } catch {
-        navigate("/login");
+        navigate("/login", { replace: true });
       }
     })();
   }, [location, navigate, setUser]);
