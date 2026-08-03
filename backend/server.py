@@ -23,11 +23,30 @@ from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("kyb")
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# Required at import time — missing vars crash the Vercel function on cold start
+# (FUNCTION_INVOCATION_FAILED / "Application startup failed") before any route runs.
+_REQUIRED_ENV = ("MONGO_URL", "DB_NAME", "JWT_SECRET")
+_missing_env = [k for k in _REQUIRED_ENV if not os.environ.get(k)]
+if _missing_env:
+    msg = (
+        "Missing required environment variables: "
+        + ", ".join(_missing_env)
+        + ". Set them in Vercel → Project Settings → Environment Variables "
+        "(for Production and the backend service), then redeploy."
+    )
+    logger.error(msg)
+    raise RuntimeError(msg)
 
-JWT_SECRET = os.environ['JWT_SECRET']
+mongo_url = os.environ["MONGO_URL"]
+# Fail fast instead of hanging ~30s (browser then reports a misleading CORS error).
+client = AsyncIOMotorClient(
+    mongo_url,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=5000,
+)
+db = client[os.environ["DB_NAME"]]
+
+JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
@@ -79,7 +98,8 @@ def init_storage():
     global storage_key
     if storage_key:
         return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    # Short timeout: storage is optional for auth; long hangs block upload routes only.
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=8)
     resp.raise_for_status()
     storage_key = resp.json()["storage_key"]
     return storage_key
@@ -747,6 +767,21 @@ async def ai_extract_document(image_b64: str, doc_type: str) -> dict:
         logger.error(f"AI extract failed: {e}")
         return {"error": "AI extraction unavailable"}
 
+# ---------------- Health (lightweight — still requires successful app import) ----------------
+@api_router.get("/health")
+async def health():
+    mongo_ok = False
+    try:
+        await db.command("ping")
+        mongo_ok = True
+    except Exception as e:
+        logger.warning(f"health mongo ping failed: {e}")
+    return {
+        "ok": mongo_ok,
+        "service": "corpscore-kyb",
+        "mongo": "up" if mongo_ok else "down",
+    }
+
 # ---------------- Auth routes ----------------
 @api_router.post("/auth/register")
 async def register(inp: RegisterInput, response: Response):
@@ -1135,15 +1170,18 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("user_id")
-    await db.applications.create_index("id")
-    await db.user_sessions.create_index("session_token")
+    # Index creation + admin seed only. Do NOT init object storage here:
+    # Emergent storage can hang ~30s and delays cold-start so the first
+    # /api/auth/* request dies at the edge with an opaque “CORS” failure.
     try:
-        init_storage()
-        logger.info("Storage initialized")
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("user_id")
+        await db.applications.create_index("id")
+        await db.user_sessions.create_index("session_token")
     except Exception as e:
-        logger.error(f"Storage init failed: {e}")
+        logger.error(f"Mongo index setup failed (check MONGO_URL): {e}")
+        raise
+
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "")
     if admin_email:
