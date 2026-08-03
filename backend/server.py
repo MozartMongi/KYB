@@ -19,6 +19,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
+import certifi
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("kyb")
@@ -38,11 +39,13 @@ if _missing_env:
     raise RuntimeError(msg)
 
 mongo_url = os.environ["MONGO_URL"]
-# Fail fast instead of hanging ~30s (browser then reports a misleading CORS error).
+# Atlas from Vercel/Python 3.12 often needs an explicit CA bundle (certifi).
+# Without it: SSL: TLSV1_ALERT_INTERNAL_ERROR → startup dies → fake CORS errors.
 client = AsyncIOMotorClient(
     mongo_url,
-    serverSelectionTimeoutMS=5000,
-    connectTimeoutMS=5000,
+    tlsCAFile=certifi.where(),
+    serverSelectionTimeoutMS=8000,
+    connectTimeoutMS=8000,
 )
 db = client[os.environ["DB_NAME"]]
 
@@ -1170,29 +1173,45 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    # Index creation + admin seed only. Do NOT init object storage here:
-    # Emergent storage can hang ~30s and delays cold-start so the first
-    # /api/auth/* request dies at the edge with an opaque “CORS” failure.
+    # Index creation + admin seed. Non-fatal on failure so the function still serves
+    # /api/health (and clear Mongo errors) instead of FUNCTION_INVOCATION_FAILED.
     try:
+        await db.command("ping")
         await db.users.create_index("email", unique=True)
         await db.users.create_index("user_id")
         await db.applications.create_index("id")
         await db.user_sessions.create_index("session_token")
+        logger.info("Mongo connected; indexes ready")
     except Exception as e:
-        logger.error(f"Mongo index setup failed (check MONGO_URL): {e}")
-        raise
+        logger.error(
+            "Mongo setup failed. Verify MONGO_URL, Atlas Network Access (0.0.0.0/0 for Vercel), "
+            "and that the password is URL-encoded: %s",
+            e,
+        )
+        return
 
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "")
     if admin_email:
-        existing = await db.users.find_one({"email": admin_email})
-        if not existing:
-            await db.users.insert_one({"user_id": f"user_{uuid.uuid4().hex[:12]}", "email": admin_email, "name": "Compliance Owner", "role": "owner", "password_hash": hash_password(admin_pw), "picture": "", "created_at": datetime.now(timezone.utc).isoformat()})
-        else:
-            update = {"role": "owner"}
-            if admin_pw and not verify_password(admin_pw, existing.get("password_hash", "")):
-                update["password_hash"] = hash_password(admin_pw)
-            await db.users.update_one({"email": admin_email}, {"$set": update})
+        try:
+            existing = await db.users.find_one({"email": admin_email})
+            if not existing:
+                await db.users.insert_one({
+                    "user_id": f"user_{uuid.uuid4().hex[:12]}",
+                    "email": admin_email,
+                    "name": "Compliance Owner",
+                    "role": "owner",
+                    "password_hash": hash_password(admin_pw),
+                    "picture": "",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            else:
+                update = {"role": "owner"}
+                if admin_pw and not verify_password(admin_pw, existing.get("password_hash", "")):
+                    update["password_hash"] = hash_password(admin_pw)
+                await db.users.update_one({"email": admin_email}, {"$set": update})
+        except Exception as e:
+            logger.error(f"Admin seed failed: {e}")
 
 @app.on_event("shutdown")
 async def shutdown():
