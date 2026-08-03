@@ -27,10 +27,12 @@ function Protected({ children }) {
 
 function AppRouter() {
   const location = useLocation();
+  // Legacy Emergent OAuth returns session_id in the URL hash on any path
   if (location.hash?.includes("session_id=")) return <AuthCallback />;
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
       <Route path="/applications/new" element={<Protected><NewApplication /></Protected>} />
       <Route path="/applications/:id" element={<Protected><ApplicationDetail /></Protected>} />
