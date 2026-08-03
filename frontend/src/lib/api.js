@@ -1,7 +1,9 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-export const API = `${BACKEND_URL}/api`;
+// Prefer env backend URL; fall back to same-origin `/api` (Vercel rewrites / proxy).
+// Avoids CORS when frontend & backend share a host; keeps cross-origin for split deploy.
+const BACKEND_URL = (process.env.REACT_APP_BACKEND_URL || "").replace(/\/$/, "");
+export const API = BACKEND_URL ? `${BACKEND_URL}/api` : "/api";
 
 export const api = axios.create({ baseURL: API, withCredentials: true });
 
