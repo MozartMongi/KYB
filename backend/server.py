@@ -36,6 +36,41 @@ STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
 APP_NAME = "corpscore-kyb"
 storage_key = None
 
+
+def get_cors_origins() -> List[str]:
+    """Build allow-list for browser origins (required when credentials are used)."""
+    origins: List[str] = []
+
+    def add(origin: Optional[str]) -> None:
+        if not origin:
+            return
+        cleaned = origin.strip().rstrip("/")
+        if cleaned and cleaned not in origins:
+            origins.append(cleaned)
+
+    for part in (os.environ.get("CORS_ORIGINS") or "").split(","):
+        add(part)
+    add(FRONTEND_URL)
+    # Common local / tunnel origins for CRA & alternate hosts
+    for default in (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ):
+        add(default)
+    return origins
+
+
+# Preview / hosted frontends often use dynamic subdomains; regex covers those
+# while explicit allow_origins still covers local & FRONTEND_URL.
+CORS_ORIGIN_REGEX = os.environ.get(
+    "CORS_ORIGIN_REGEX",
+    r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.(emergentagent\.com|vercel\.app)",
+)
+
 app = FastAPI(title="CorpScore KYB")
 api_router = APIRouter(prefix="/api")
 
@@ -1086,7 +1121,17 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     }
 
 app.include_router(api_router)
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=[FRONTEND_URL, "http://localhost:3000"], allow_methods=["*"], allow_headers=["*"])
+# CORS must wrap the app (outermost) so preflight OPTIONS and error responses get headers.
+# allow_credentials=True requires explicit origins (not "*") — matches axios withCredentials.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_origins(),
+    allow_origin_regex=CORS_ORIGIN_REGEX,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup():
