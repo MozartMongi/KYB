@@ -20,8 +20,11 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    if (window.location.hash?.includes("session_id=")) {
+    // Skip /auth/me while an OAuth callback is being processed
+    const isOAuthCallback =
+      window.location.pathname === "/auth/callback" ||
+      window.location.hash?.includes("session_id=");
+    if (isOAuthCallback) {
       setLoading(false);
       return;
     }
