@@ -19,79 +19,26 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
-import certifi
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("kyb")
 
-# Required at import time — missing vars crash the Vercel function on cold start
-# (FUNCTION_INVOCATION_FAILED / "Application startup failed") before any route runs.
-_REQUIRED_ENV = ("MONGO_URL", "DB_NAME", "JWT_SECRET")
-_missing_env = [k for k in _REQUIRED_ENV if not os.environ.get(k)]
-if _missing_env:
-    msg = (
-        "Missing required environment variables: "
-        + ", ".join(_missing_env)
-        + ". Set them in Vercel → Project Settings → Environment Variables "
-        "(for Production and the backend service), then redeploy."
-    )
-    logger.error(msg)
-    raise RuntimeError(msg)
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
 
-mongo_url = os.environ["MONGO_URL"]
-# Atlas from Vercel/Python 3.12 often needs an explicit CA bundle (certifi).
-# Without it: SSL: TLSV1_ALERT_INTERNAL_ERROR → startup dies → fake CORS errors.
-client = AsyncIOMotorClient(
-    mongo_url,
-    tlsCAFile=certifi.where(),
-    serverSelectionTimeoutMS=8000,
-    connectTimeoutMS=8000,
-)
-db = client[os.environ["DB_NAME"]]
-
-JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
 APP_NAME = "corpscore-kyb"
 storage_key = None
-
-
-def get_cors_origins() -> List[str]:
-    """Build allow-list for browser origins (required when credentials are used)."""
-    origins: List[str] = []
-
-    def add(origin: Optional[str]) -> None:
-        if not origin:
-            return
-        cleaned = origin.strip().rstrip("/")
-        if cleaned and cleaned not in origins:
-            origins.append(cleaned)
-
-    for part in (os.environ.get("CORS_ORIGINS") or "").split(","):
-        add(part)
-    add(FRONTEND_URL)
-    # Common local / tunnel origins for CRA & alternate hosts
-    for default in (
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ):
-        add(default)
-    return origins
-
-
-# Preview / hosted frontends often use dynamic subdomains; regex covers those
-# while explicit allow_origins still covers local & FRONTEND_URL.
-CORS_ORIGIN_REGEX = os.environ.get(
-    "CORS_ORIGIN_REGEX",
-    r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.(emergentagent\.com|vercel\.app)",
-)
 
 app = FastAPI(title="CorpScore KYB")
 api_router = APIRouter(prefix="/api")
@@ -101,8 +48,7 @@ def init_storage():
     global storage_key
     if storage_key:
         return storage_key
-    # Short timeout: storage is optional for auth; long hangs block upload routes only.
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=8)
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
     resp.raise_for_status()
     storage_key = resp.json()["storage_key"]
     return storage_key
@@ -198,6 +144,10 @@ class LoginInput(BaseModel):
 
 class SessionInput(BaseModel):
     session_id: str
+
+class GoogleAuthInput(BaseModel):
+    code: str
+    redirect_uri: str
 
 class Director(BaseModel):
     name: str
@@ -770,21 +720,6 @@ async def ai_extract_document(image_b64: str, doc_type: str) -> dict:
         logger.error(f"AI extract failed: {e}")
         return {"error": "AI extraction unavailable"}
 
-# ---------------- Health (lightweight — still requires successful app import) ----------------
-@api_router.get("/health")
-async def health():
-    mongo_ok = False
-    try:
-        await db.command("ping")
-        mongo_ok = True
-    except Exception as e:
-        logger.warning(f"health mongo ping failed: {e}")
-    return {
-        "ok": mongo_ok,
-        "service": "corpscore-kyb",
-        "mongo": "up" if mongo_ok else "down",
-    }
-
 # ---------------- Auth routes ----------------
 @api_router.post("/auth/register")
 async def register(inp: RegisterInput, response: Response):
@@ -812,23 +747,88 @@ async def login(inp: LoginInput, response: Response):
     set_auth_cookie(response, "access_token", token)
     return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "token": token}
 
-@api_router.post("/auth/session")
-async def google_session(inp: SessionInput, response: Response):
-    r = requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": inp.session_id}, timeout=30)
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Sesi Google tidak valid")
-    data = r.json()
-    email = data["email"].strip().lower()
+async def _upsert_google_user(email: str, name: str, picture: str) -> dict:
+    email = email.strip().lower()
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         role = "owner" if email == os.environ.get("ADMIN_EMAIL", "").lower() else "applicant"
-        user = {"user_id": user_id, "email": email, "name": data.get("name", email), "role": role, "picture": data.get("picture", ""), "created_at": datetime.now(timezone.utc).isoformat()}
+        user = {
+            "user_id": user_id, "email": email, "name": name or email,
+            "role": role, "picture": picture or "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
         await db.users.insert_one(dict(user))
-    session_token = data["session_token"]
-    await db.user_sessions.insert_one({"user_id": user["user_id"], "session_token": session_token, "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(), "created_at": datetime.now(timezone.utc).isoformat()})
+    elif picture and not user.get("picture"):
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"picture": picture}})
+        user["picture"] = picture
+    return user
+
+async def _create_user_session(response: Response, user: dict) -> dict:
+    session_token = uuid.uuid4().hex
+    await db.user_sessions.insert_one({
+        "user_id": user["user_id"],
+        "session_token": session_token,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
     set_auth_cookie(response, "session_token", session_token)
-    return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "picture": user.get("picture", "")}
+    return {
+        "user_id": user["user_id"], "email": user["email"],
+        "name": user.get("name"), "role": user.get("role"),
+        "picture": user.get("picture", ""), "token": session_token,
+    }
+
+@api_router.post("/auth/google")
+async def google_oauth(inp: GoogleAuthInput, response: Response):
+    """Exchange Google OAuth authorization code for a user session."""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="Google OAuth belum dikonfigurasi (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)")
+    token_resp = requests.post(GOOGLE_TOKEN_URL, data={
+        "code": inp.code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": inp.redirect_uri,
+        "grant_type": "authorization_code",
+    }, timeout=30)
+    if token_resp.status_code != 200:
+        logger.warning("Google token exchange failed: %s", token_resp.text)
+        raise HTTPException(status_code=401, detail="Gagal menukar kode Google OAuth")
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Token Google tidak valid")
+    info_resp = requests.get(
+        GOOGLE_USERINFO_URL,
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=30,
+    )
+    if info_resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Gagal mengambil profil Google")
+    info = info_resp.json()
+    email = (info.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Akun Google tidak menyediakan email")
+    if info.get("email_verified") is False:
+        raise HTTPException(status_code=401, detail="Email Google belum terverifikasi")
+    user = await _upsert_google_user(email, info.get("name", email), info.get("picture", ""))
+    return await _create_user_session(response, user)
+
+@api_router.post("/auth/session")
+async def google_session(inp: SessionInput, response: Response):
+    """Legacy Emergent session bridge — kept for backward compatibility."""
+    r = requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": inp.session_id}, timeout=30)
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Sesi Google tidak valid")
+    data = r.json()
+    user = await _upsert_google_user(data["email"], data.get("name", data["email"]), data.get("picture", ""))
+    session_token = data.get("session_token") or uuid.uuid4().hex
+    await db.user_sessions.insert_one({
+        "user_id": user["user_id"], "session_token": session_token,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    set_auth_cookie(response, "session_token", session_token)
+    return {"user_id": user["user_id"], "email": user["email"], "name": user.get("name"), "role": user.get("role"), "picture": user.get("picture", "")}
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
@@ -1159,59 +1159,30 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     }
 
 app.include_router(api_router)
-# CORS must wrap the app (outermost) so preflight OPTIONS and error responses get headers.
-# allow_credentials=True requires explicit origins (not "*") — matches axios withCredentials.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=get_cors_origins(),
-    allow_origin_regex=CORS_ORIGIN_REGEX,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=[FRONTEND_URL, "http://localhost:3000"], allow_methods=["*"], allow_headers=["*"])
 
 @app.on_event("startup")
 async def startup():
-    # Index creation + admin seed. Non-fatal on failure so the function still serves
-    # /api/health (and clear Mongo errors) instead of FUNCTION_INVOCATION_FAILED.
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("user_id")
+    await db.applications.create_index("id")
+    await db.user_sessions.create_index("session_token")
     try:
-        await db.command("ping")
-        await db.users.create_index("email", unique=True)
-        await db.users.create_index("user_id")
-        await db.applications.create_index("id")
-        await db.user_sessions.create_index("session_token")
-        logger.info("Mongo connected; indexes ready")
+        init_storage()
+        logger.info("Storage initialized")
     except Exception as e:
-        logger.error(
-            "Mongo setup failed. Verify MONGO_URL, Atlas Network Access (0.0.0.0/0 for Vercel), "
-            "and that the password is URL-encoded: %s",
-            e,
-        )
-        return
-
+        logger.error(f"Storage init failed: {e}")
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "")
     if admin_email:
-        try:
-            existing = await db.users.find_one({"email": admin_email})
-            if not existing:
-                await db.users.insert_one({
-                    "user_id": f"user_{uuid.uuid4().hex[:12]}",
-                    "email": admin_email,
-                    "name": "Compliance Owner",
-                    "role": "owner",
-                    "password_hash": hash_password(admin_pw),
-                    "picture": "",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                })
-            else:
-                update = {"role": "owner"}
-                if admin_pw and not verify_password(admin_pw, existing.get("password_hash", "")):
-                    update["password_hash"] = hash_password(admin_pw)
-                await db.users.update_one({"email": admin_email}, {"$set": update})
-        except Exception as e:
-            logger.error(f"Admin seed failed: {e}")
+        existing = await db.users.find_one({"email": admin_email})
+        if not existing:
+            await db.users.insert_one({"user_id": f"user_{uuid.uuid4().hex[:12]}", "email": admin_email, "name": "Compliance Owner", "role": "owner", "password_hash": hash_password(admin_pw), "picture": "", "created_at": datetime.now(timezone.utc).isoformat()})
+        else:
+            update = {"role": "owner"}
+            if admin_pw and not verify_password(admin_pw, existing.get("password_hash", "")):
+                update["password_hash"] = hash_password(admin_pw)
+            await db.users.update_one({"email": admin_email}, {"$set": update})
 
 @app.on_event("shutdown")
 async def shutdown():
