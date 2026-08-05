@@ -133,8 +133,18 @@ def create_access_token(user_id: str, email: str) -> str:
     payload = {"sub": user_id, "email": email, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "access"}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-def set_auth_cookie(response: Response, name: str, value: str):
-    response.set_cookie(key=name, value=value, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
+def cookie_flags(request: Optional[Request]) -> dict:
+    """`Secure; SameSite=None` is required for cross-site OAuth returns but browsers
+    drop such cookies on plain HTTP, which silently logs the user out on local dev."""
+    proto = ""
+    if request is not None:
+        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").split(",")[0].strip().lower()
+    if proto == "https":
+        return {"secure": True, "samesite": "none"}
+    return {"secure": False, "samesite": "lax"}
+
+def set_auth_cookie(response: Response, name: str, value: str, request: Optional[Request] = None):
+    response.set_cookie(key=name, value=value, httponly=True, max_age=604800, path="/", **cookie_flags(request))
 
 async def resolve_user(request: Request):
     # 1. JWT access_token cookie
@@ -211,7 +221,7 @@ class CompanyInput(BaseModel):
     brand_name: str = ""
     entity_type: str = "PT"
     nib: str = ""
-    nib_expiry_date: str = ""  # ISO date YYYY-MM-DD, masa berlaku NIB
+    nib_expiry_date: str = ""  # retained for legacy records; NIB no longer has expiry
     npwp: str = ""
     deed_number: str = ""
     established_year: Optional[int] = None
@@ -248,15 +258,6 @@ MOCK_WATCHLIST = [
     {"name": "Global Shell Holdings", "type": "ADVERSE_MEDIA", "list": "Adverse Media - Fraud"},
     {"name": "Siti Nurhaliza Wijaya", "type": "PEP", "list": "Domestic PEP - Family"},
 ]
-
-def _parse_date(s: str):
-    if not s:
-        return None
-    try:
-        s = s.strip().split("T")[0]
-        return datetime.strptime(s, "%Y-%m-%d").date()
-    except Exception:
-        return None
 
 def add_business_days(start: datetime, n: int) -> datetime:
     d = start
@@ -318,12 +319,9 @@ def decode_nib_qr(image_bytes: bytes, expected_nib: str = "") -> dict:
 def validate_nib(company: dict, qr: dict = None) -> dict:
     raw = company.get("nib") or ""
     nib = _clean_nib(raw)
-    exp = _parse_date(company.get("nib_expiry_date"))
-    today = datetime.now(timezone.utc).date()
     fmt = validate_nib_format(raw)
     result = {
         "nib_present": bool(nib), "format_valid": fmt,
-        "nib_expiry_date": company.get("nib_expiry_date", ""),
         "expired": False, "valid": True, "reason": "", "qr": qr, "registry": None,
     }
     if not nib:
@@ -334,14 +332,6 @@ def validate_nib(company: dict, qr: dict = None) -> dict:
         result["valid"] = False
         result["reason"] = "Format NIB tidak valid (harus 13 digit)"
     result["registry"] = nib_registry_lookup(nib)
-    if exp is None:
-        result["valid"] = False
-        if not result["reason"]:
-            result["reason"] = "Tanggal masa berlaku NIB tidak valid / kosong"
-    elif exp < today:
-        result["expired"] = True
-        result["valid"] = False
-        result["reason"] = f"NIB telah kedaluwarsa pada {exp.isoformat()}"
     if qr and qr.get("success") and not qr.get("matches_input", True):
         result["valid"] = False
         if not result["reason"]:
@@ -478,6 +468,15 @@ def api_co_id_bank_validation(bank_code: str, account_number: str, account_name:
         logger.error(f"api.co.id bank validation failed: {type(e).__name__}")
         return {"configured": True, "source": "api.co.id", "success": False, "error": "Gagal menghubungi provider"}
 
+def _mask_account_number(acc: str) -> str:
+    """Show only the last 4 digits; mask the rest with *."""
+    digits = "".join(ch for ch in (acc or "") if ch.isdigit())
+    if not digits:
+        return ""
+    if len(digits) <= 4:
+        return digits
+    return ("*" * (len(digits) - 4)) + digits[-4:]
+
 def verify_bank(company: dict) -> dict:
     bank_code = (company.get("bank_code") or "").strip()
     name = (company.get("bank_name") or "").strip()
@@ -487,7 +486,7 @@ def verify_bank(company: dict) -> dict:
     brand = company.get("brand_name", "")
     result = {
         "bank_name": name, "bank_code": bank_code,
-        "account_number_masked": ("•••• " + acc[-4:]) if len(acc) >= 4 else acc,
+        "account_number_masked": _mask_account_number(acc),
         "declared_holder": holder, "resolved_name": "", "verified": False,
         "name_match_score": 0, "status": "unverified", "note": "", "source": "SIMULASI",
         "provider": None,
@@ -732,7 +731,7 @@ def generate_report_pdf(a: dict) -> bytes:
 
     el.append(Paragraph("Profil Perusahaan", h2))
     ci = [["Nama Legal", co.get("legal_name", "-")], ["Jenis / Industri", f"{co.get('entity_type','-')} · {co.get('industry','-')}"],
-          ["NIB", co.get("nib", "-")], ["Masa berlaku NIB", co.get("nib_expiry_date", "-")], ["NPWP", co.get("npwp", "-")],
+          ["NIB", co.get("nib", "-")], ["NPWP", co.get("npwp", "-")],
           ["Pendapatan Tahunan", rp_pdf(co.get("annual_revenue_idr"))], ["Modal Disetor", rp_pdf(co.get("paid_up_capital_idr"))]]
     el.append(_pdf_table(ci, Table, TableStyle, colors))
 
@@ -749,7 +748,7 @@ def generate_report_pdf(a: dict) -> bytes:
     npwp_v = val.get("npwp") or {}
     npwp_data = (npwp_v.get("data") or {}) if isinstance(npwp_v.get("data"), dict) else {}
     npwp_inner = npwp_data.get("data") if isinstance(npwp_data.get("data"), dict) else {}
-    vi = [["NIB valid", str(nib_v.get("valid", "-"))], ["NIB kedaluwarsa", str(nib_v.get("expired", "-"))],
+    vi = [["NIB valid", str(nib_v.get("valid", "-"))],
           ["Registry OSS", f"{(nib_v.get('registry') or {}).get('source','-')} · {(nib_v.get('registry') or {}).get('status','-')}"],
           ["Bank", f"{bank_v.get('bank_name','-')} {bank_v.get('account_number_masked','')}"],
           ["Bank verified", f"{bank_v.get('verified','-')} ({bank_v.get('name_match_score',0)}%) · {bank_v.get('source','-')}"],
@@ -971,7 +970,7 @@ async def health():
 
 # ---------------- Auth routes ----------------
 @api_router.post("/auth/register")
-async def register(inp: RegisterInput, response: Response):
+async def register(inp: RegisterInput, request: Request, response: Response):
     email = inp.email.strip().lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email sudah terdaftar")
@@ -983,23 +982,38 @@ async def register(inp: RegisterInput, response: Response):
     }
     await db.users.insert_one(doc)
     token = create_access_token(user_id, email)
-    set_auth_cookie(response, "access_token", token)
+    set_auth_cookie(response, "access_token", token, request)
     return {"user_id": user_id, "email": email, "name": doc["name"], "role": "applicant", "token": token}
 
 @api_router.post("/auth/login")
-async def login(inp: LoginInput, response: Response):
+async def login(inp: LoginInput, request: Request, response: Response):
     email = inp.email.strip().lower()
     user = await db.users.find_one({"email": email})
     if not user or not user.get("password_hash") or not verify_password(inp.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Email atau kata sandi salah")
     token = create_access_token(user["user_id"], email)
-    set_auth_cookie(response, "access_token", token)
+    set_auth_cookie(response, "access_token", token, request)
     return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "token": token}
 
 @api_router.post("/auth/session")
-async def google_session(inp: SessionInput, response: Response):
-    r = requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": inp.session_id}, timeout=30)
+async def google_session(inp: SessionInput, request: Request, response: Response):
+    try:
+        # Below the frontend's 20s client timeout so a slow provider yields a real error.
+        r = requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": inp.session_id}, timeout=15)
+    except requests.RequestException as e:
+        logger.warning("OAuth session-data request failed: %s", e)
+        raise HTTPException(status_code=503, detail="Layanan login Google tidak dapat dihubungi")
     if r.status_code != 200:
+        # A session_id is single-use; a replay after a successful exchange must not log
+        # the user out, so fall back to the credentials already on the request.
+        existing = await resolve_user(request)
+        if existing:
+            existing.pop("password_hash", None)
+            return {
+                "user_id": existing["user_id"], "email": existing["email"], "name": existing.get("name"),
+                "role": existing.get("role"), "picture": existing.get("picture", ""),
+            }
+        logger.warning("OAuth session-data rejected session_id (HTTP %s)", r.status_code)
         raise HTTPException(status_code=401, detail="Sesi Google tidak valid")
     data = r.json()
     email = data["email"].strip().lower()
@@ -1010,9 +1024,17 @@ async def google_session(inp: SessionInput, response: Response):
         user = {"user_id": user_id, "email": email, "name": data.get("name", email), "role": role, "picture": data.get("picture", ""), "created_at": datetime.now(timezone.utc).isoformat()}
         await db.users.insert_one(dict(user))
     session_token = data["session_token"]
-    await db.user_sessions.insert_one({"user_id": user["user_id"], "session_token": session_token, "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(), "created_at": datetime.now(timezone.utc).isoformat()})
-    set_auth_cookie(response, "session_token", session_token)
-    return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "picture": user.get("picture", "")}
+    await db.user_sessions.update_one(
+        {"session_token": session_token},
+        {"$set": {
+            "user_id": user["user_id"],
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        }, "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    set_auth_cookie(response, "session_token", session_token, request)
+    # `token` lets the SPA authenticate via Bearer when the browser blocks the cookie.
+    return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "picture": user.get("picture", ""), "token": session_token}
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
@@ -1023,8 +1045,11 @@ async def logout(request: Request, response: Response):
     stoken = request.cookies.get("session_token")
     if stoken:
         await db.user_sessions.delete_many({"session_token": stoken})
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("session_token", path="/")
+    # Attributes must match the Set-Cookie that created them, otherwise browsers
+    # keep the original cookie and the user stays logged in.
+    flags = cookie_flags(request)
+    response.delete_cookie("access_token", path="/", **flags)
+    response.delete_cookie("session_token", path="/", **flags)
     return {"ok": True}
 
 # ---------------- Application routes ----------------
@@ -1297,10 +1322,7 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
     company = a["company"]
     nib_val = validate_nib(company, a.get("nib_qr"))
     bank_val = verify_bank(company)
-    # Reuse prior verify-npwp result when present to avoid double-billing api.co.id
-    npwp_val = a.get("npwp_check") if isinstance(a.get("npwp_check"), dict) else None
-    if not npwp_val:
-        npwp_val = verify_npwp(company)
+    npwp_val = verify_npwp(company)
     hits = screen_watchlist(company)
     rule = compute_rule_score(company, hits)
     ai = await ai_risk_review(company, rule, hits)
@@ -1317,8 +1339,8 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
         "submitted_at": now.isoformat(), "updated_at": now.isoformat(),
         "sla_due_at": None, "sla_days": None, "auto_reject_reason": None,
     }
-    # Auto-rejection: NIB expired / invalid masa berlaku
-    if nib_val["expired"] or not nib_val["valid"]:
+    # Auto-rejection: NIB missing / format invalid / QR mismatch
+    if not nib_val["valid"]:
         update["status"] = "auto_rejected"
         update["decision"] = "auto_rejected"
         update["auto_reject_reason"] = nib_val["reason"]
