@@ -6,9 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send, Landmark, BadgeCheck } from "lucide-react";
+import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send, BadgeCheck, Check, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const INDUSTRIES = ["crypto_exchange","money_services","forex","fintech","trading","real_estate","ecommerce","technology","consulting","retail","logistics","mining","manufacturing","other"];
 const STEPS = [
@@ -18,6 +21,22 @@ const STEPS = [
   { n: 4, label: "Dokumen", icon: UploadCloud },
 ];
 
+const filled = (v) => String(v ?? "").trim().length > 0;
+
+/** Mandatory fields per step — Lanjut stays disabled until these are complete. */
+function stepComplete(step, c) {
+  if (step === 1) {
+    return filled(c.legal_name) && filled(c.npwp) && filled(c.address) && (c.address || "").trim().length >= 7;
+  }
+  if (step === 2) {
+    return c.directors.length > 0 && c.directors.every((d) => filled(d.name));
+  }
+  if (step === 3) {
+    return filled(c.bank_code) && filled(c.bank_account_number) && filled(c.bank_account_holder);
+  }
+  return true;
+}
+
 export default function NewApplication() {
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
@@ -26,7 +45,7 @@ export default function NewApplication() {
   const [banks, setBanks] = useState([]);
   const [banksLoading, setBanksLoading] = useState(true);
   const [c, setC] = useState({
-    legal_name: "", brand_name: "", entity_type: "PT", nib: "", nib_expiry_date: "", npwp: "", deed_number: "",
+    legal_name: "", brand_name: "", entity_type: "PT", nib: "", npwp: "", deed_number: "",
     established_year: "", industry: "crypto_exchange", country: "Indonesia", address: "", website: "",
     annual_revenue_idr: "", paid_up_capital_idr: "", expected_monthly_volume_idr: "", source_of_funds: "",
     bank_name: "", bank_code: "", bank_account_number: "", bank_account_holder: "",
@@ -34,9 +53,8 @@ export default function NewApplication() {
   });
   const [docs, setDocs] = useState([]);
   const [nibCheck, setNibCheck] = useState(null);
-  const [npwpCheck, setNpwpCheck] = useState(null);
-  const [bankCheck, setBankCheck] = useState(null);
   const [verifying, setVerifying] = useState(false);
+  const [bankOpen, setBankOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,39 +116,11 @@ export default function NewApplication() {
     finally { setVerifying(false); }
   };
 
-  const verifyBank = async () => {
-    if (!c.bank_code) { toast.error("Pilih bank terlebih dahulu"); return; }
-    if (!c.bank_account_number) { toast.error("Isi nomor rekening terlebih dahulu"); return; }
-    if (!c.bank_account_holder) { toast.error("Isi nama pemilik rekening terlebih dahulu"); return; }
-    setVerifying(true);
-    try {
-      const id = await ensureApp();
-      const { data } = await api.post(`/applications/${id}/verify-bank`);
-      setBankCheck(data.bank);
-      toast[data.bank?.verified ? "success" : "error"](data.bank?.note || "Selesai");
-    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
-    finally { setVerifying(false); }
-  };
-
-  const verifyNpwp = async () => {
-    if (!c.npwp) { toast.error("Isi NPWP terlebih dahulu"); return; }
-    if (!c.legal_name) { toast.error("Isi nama legal perusahaan terlebih dahulu"); return; }
-    if (!(c.address || "").trim() || (c.address || "").trim().length < 7) {
-      toast.error("Isi alamat terdaftar (minimal 7 karakter)"); return;
-    }
-    setVerifying(true);
-    try {
-      const id = await ensureApp();
-      const { data } = await api.post(`/applications/${id}/verify-npwp`);
-      setNpwpCheck(data.npwp);
-      const msg = data.npwp?.data?.message || data.npwp?.message || "Selesai";
-      toast[data.npwp?.is_success ? "success" : "error"](msg);
-    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
-    finally { setVerifying(false); }
-  };
-
   const next = async () => {
-    if (step === 1 && !c.legal_name) { toast.error("Nama legal wajib diisi"); return; }
+    if (!stepComplete(step, c)) {
+      toast.error("Lengkapi field wajib sebelum melanjutkan");
+      return;
+    }
     setBusy(true);
     try { await ensureApp(); setStep(step + 1); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
@@ -169,9 +159,9 @@ export default function NewApplication() {
     setBusy(true);
     try {
       const id = await ensureApp();
-      toast.loading("Menjalankan screening & credit scoring…", { id: "sub" });
+      toast.loading("Memverifikasi NPWP & rekening, lalu menjalankan screening & credit scoring…", { id: "sub" });
       await api.post(`/applications/${id}/submit`);
-      toast.success("Aplikasi dikirim untuk review", { id: "sub" });
+      toast.success("Aplikasi dikirim. Hasil verifikasi siap ditinjau.", { id: "sub" });
       navigate(`/applications/${id}`);
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail), { id: "sub" });
@@ -224,13 +214,12 @@ export default function NewApplication() {
                 </Select>
               </Field>
               <Field label="NIB"><Input data-testid="nib-input" value={c.nib} onChange={upd("nib")} className="rounded-sm font-mono" placeholder="13 digit" /></Field>
-              <Field label="Masa Berlaku NIB *" hint="Sistem auto-reject bila kedaluwarsa"><Input data-testid="nib-expiry-input" type="date" value={c.nib_expiry_date} onChange={upd("nib_expiry_date")} className="rounded-sm font-mono" /></Field>
-              <Field label="NPWP"><Input data-testid="npwp-input" value={c.npwp} onChange={upd("npwp")} className="rounded-sm font-mono" /></Field>
+              <Field label="NPWP *"><Input data-testid="npwp-input" value={c.npwp} onChange={upd("npwp")} className="rounded-sm font-mono" placeholder="15–16 digit" /></Field>
               <Field label="No. Akta Pendirian"><Input value={c.deed_number} onChange={upd("deed_number")} className="rounded-sm font-mono" /></Field>
               <Field label="Tahun Berdiri"><Input type="number" value={c.established_year} onChange={upd("established_year")} className="rounded-sm font-mono" placeholder="2019" /></Field>
               <Field label="Website"><Input value={c.website} onChange={upd("website")} className="rounded-sm" /></Field>
               <Field label="Negara"><Input value={c.country} onChange={upd("country")} className="rounded-sm" /></Field>
-              <div className="sm:col-span-2"><Field label="Alamat Terdaftar"><Textarea value={c.address} onChange={upd("address")} className="rounded-sm" rows={2} /></Field></div>
+              <div className="sm:col-span-2"><Field label="Alamat Terdaftar *" hint="Minimal 7 karakter (diperlukan untuk verifikasi NPWP saat pengiriman)"><Textarea value={c.address} onChange={upd("address")} className="rounded-sm" rows={2} /></Field></div>
               <div className="sm:col-span-2 border border-dashed border-gray-300 rounded-sm p-4">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div>
@@ -251,38 +240,6 @@ export default function NewApplication() {
                   </div>
                 )}
               </div>
-              <div className="sm:col-span-2 border border-dashed border-gray-300 rounded-sm p-4">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div>
-                    <div className="text-sm font-medium flex items-center gap-2"><BadgeCheck className="w-4 h-4 text-blue-600" /> Verifikasi NPWP</div>
-                    <div className="text-xs text-gray-500">Cocokkan NPWP, nama legal, dan alamat terhadap data provider (api.co.id)</div>
-                  </div>
-                  <Button data-testid="verify-npwp-button" type="button" variant="outline" onClick={verifyNpwp} disabled={verifying} className="rounded-sm gap-2">
-                    <BadgeCheck className="w-4 h-4" /> {verifying ? "Memverifikasi…" : "Verifikasi NPWP"}
-                  </Button>
-                </div>
-                {npwpCheck && (
-                  <div
-                    data-testid="npwp-check-result"
-                    className={`mt-3 text-sm border rounded-sm p-3 ${npwpCheck.is_success ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}
-                  >
-                    <div>Message: <b>{npwpCheck.data?.message || npwpCheck.message || "—"}</b></div>
-                    {npwpCheck.data?.transaction_id && (
-                      <div className="text-xs mt-1 font-mono">Trx: {npwpCheck.data.transaction_id}</div>
-                    )}
-                    {npwpCheck.data?.data && (
-                      <div className="mt-2 space-y-0.5 font-mono text-xs">
-                        <div>Nama: {npwpCheck.data.data.name || "—"}</div>
-                        <div>Alamat: {npwpCheck.data.data.address || "—"}</div>
-                        <div>Status WP: {npwpCheck.data.data.status_wp || "—"} · Status SPT: {npwpCheck.data.data.status_spt || "—"}</div>
-                      </div>
-                    )}
-                    {!npwpCheck.data?.data && npwpCheck.message && !npwpCheck.data?.message && (
-                      <div className="text-xs mt-1">{npwpCheck.message}</div>
-                    )}
-                  </div>
-                )}
-              </div>
             </div>
           )}
 
@@ -295,7 +252,7 @@ export default function NewApplication() {
                     {c.directors.length > 1 && <button data-testid={`remove-director-${i}`} onClick={() => rmDir(i)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>}
                   </div>
                   <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Nama"><Input data-testid={`director-name-${i}`} value={d.name} onChange={(e) => updDir(i, "name", e.target.value)} className="rounded-sm" /></Field>
+                    <Field label="Nama *"><Input data-testid={`director-name-${i}`} value={d.name} onChange={(e) => updDir(i, "name", e.target.value)} className="rounded-sm" /></Field>
                     <Field label="Jabatan"><Input value={d.role} onChange={(e) => updDir(i, "role", e.target.value)} className="rounded-sm" /></Field>
                     <Field label="No. Identitas (KTP/Paspor)"><Input value={d.id_number} onChange={(e) => updDir(i, "id_number", e.target.value)} className="rounded-sm font-mono" /></Field>
                     <Field label="Kepemilikan (%)"><Input type="number" value={d.ownership_pct} onChange={(e) => updDir(i, "ownership_pct", e.target.value)} className="rounded-sm font-mono" /></Field>
@@ -319,50 +276,64 @@ export default function NewApplication() {
               <div className="sm:col-span-2 border-t border-gray-200 pt-4 mt-1">
                 <div className="font-head font-bold text-sm mb-3">Rekening Bank Perusahaan</div>
               </div>
-              <Field label="Bank">
-                <Select
-                  value={c.bank_code || undefined}
-                  onValueChange={(v) => {
-                    const b = banks.find((x) => x.code === v);
-                    setC({ ...c, bank_code: v, bank_name: b ? b.name : c.bank_name });
-                  }}
-                  disabled={banksLoading || banks.length === 0}
-                >
-                  <SelectTrigger className="rounded-sm" data-testid="bank-code-select">
-                    <SelectValue placeholder={banksLoading ? "Memuat daftar bank…" : "Pilih bank"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {banks.map((b) => (
-                      <SelectItem key={b.code} value={b.code}>{b.name} ({b.code})</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <Field label="Bank *">
+                <Popover open={bankOpen} onOpenChange={setBankOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={bankOpen}
+                      data-testid="bank-code-select"
+                      disabled={banksLoading || banks.length === 0}
+                      className="w-full justify-between rounded-sm font-normal h-9 px-3"
+                    >
+                      <span className="truncate">
+                        {banksLoading
+                          ? "Memuat daftar bank…"
+                          : c.bank_code
+                            ? `${c.bank_name || banks.find((b) => b.code === c.bank_code)?.name || c.bank_code} (${c.bank_code})`
+                            : "Cari atau pilih bank…"}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 rounded-sm" align="start">
+                    <Command>
+                      <CommandInput placeholder="Cari nama atau kode bank…" className="h-9" />
+                      <CommandList>
+                        <CommandEmpty>Bank tidak ditemukan.</CommandEmpty>
+                        <CommandGroup>
+                          {banks.map((b) => (
+                            <CommandItem
+                              key={b.code}
+                              value={`${b.name} ${b.code}`}
+                              data-testid={`bank-option-${b.code}`}
+                              onSelect={() => {
+                                setC({ ...c, bank_code: b.code, bank_name: b.name });
+                                setBankOpen(false);
+                              }}
+                            >
+                              <Check className={cn("mr-2 h-4 w-4", c.bank_code === b.code ? "opacity-100" : "opacity-0")} />
+                              <span className="truncate">{b.name}</span>
+                              <span className="ml-auto pl-2 font-mono text-xs text-gray-400">{b.code}</span>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </Field>
-              <Field label="Nomor Rekening"><Input data-testid="bank-account-number-input" value={c.bank_account_number} onChange={upd("bank_account_number")} className="rounded-sm font-mono" /></Field>
-              <div className="sm:col-span-2"><Field label="Nama Pemilik Rekening" hint="Diverifikasi via api.co.id Bank Validation"><Input data-testid="bank-account-holder-input" value={c.bank_account_holder} onChange={upd("bank_account_holder")} className="rounded-sm" placeholder="PT Contoh Kripto Nusantara" /></Field></div>
-              <div className="sm:col-span-2">
-                <Button data-testid="verify-bank-button" type="button" variant="outline" onClick={verifyBank} disabled={verifying} className="rounded-sm gap-2"><Landmark className="w-4 h-4" /> {verifying ? "Memverifikasi…" : "Verifikasi Rekening (Name Check)"}</Button>
-                {bankCheck && (
-                  <div data-testid="bank-check-result" className={`mt-3 text-sm border rounded-sm p-3 ${bankCheck.verified ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
-                    <div>Status: <b>{(bankCheck.status || "").toUpperCase()}</b> · Sumber: <span className="font-mono">{bankCheck.source}</span></div>
-                    <div>Nama sesuai bank: <span className="font-mono">{bankCheck.resolved_name || "—"}</span> · Kecocokan: <span className="font-mono">{bankCheck.name_match_score}%</span></div>
-                    {bankCheck.provider?.data && (
-                      <div className="text-xs mt-1 font-mono">
-                        Valid: {String(bankCheck.provider.data.is_valid)} · Score: {bankCheck.provider.data.score ?? "—"}
-                        {bankCheck.provider.data.message ? ` · ${bankCheck.provider.data.message}` : ""}
-                      </div>
-                    )}
-                    <div className="text-xs mt-1">{bankCheck.note}</div>
-                  </div>
-                )}
-              </div>
+              <Field label="Nomor Rekening *"><Input data-testid="bank-account-number-input" value={c.bank_account_number} onChange={upd("bank_account_number")} className="rounded-sm font-mono" /></Field>
+              <div className="sm:col-span-2"><Field label="Nama Pemilik Rekening *" hint="Diverifikasi otomatis saat Kirim & Nilai Risiko"><Input data-testid="bank-account-holder-input" value={c.bank_account_holder} onChange={upd("bank_account_holder")} className="rounded-sm" placeholder="PT Contoh Kripto Nusantara" /></Field></div>
             </div>
           )}
 
           {step === 4 && (
             <div className="space-y-4">
               <div className="flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-sm p-3">
-                <Sparkles className="w-4 h-4" /> Unggah gambar dokumen (JPG/PNG) — AI akan mengekstrak data secara otomatis.
+                <Sparkles className="w-4 h-4" /> Unggah gambar dokumen (JPG/PNG) — AI akan mengekstrak data secara otomatis. Saat kirim, sistem memverifikasi NPWP & rekening bank lalu menilai risiko.
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {["Akta Pendirian","NIB","NPWP","KTP Direktur","Laporan Keuangan","Lainnya"].map((dt) => (
@@ -389,7 +360,7 @@ export default function NewApplication() {
           <div className="flex justify-between mt-8 pt-5 border-t border-gray-200">
             <Button data-testid="prev-step-button" variant="outline" onClick={() => setStep(Math.max(1, step - 1))} disabled={step === 1} className="rounded-sm gap-2"><ArrowLeft className="w-4 h-4" /> Kembali</Button>
             {step < 4 ? (
-              <Button data-testid="next-step-button" onClick={next} disabled={busy} className="rounded-sm bg-black hover:bg-gray-800 gap-2">Lanjut <ArrowRight className="w-4 h-4" /></Button>
+              <Button data-testid="next-step-button" onClick={next} disabled={busy || !stepComplete(step, c)} className="rounded-sm bg-black hover:bg-gray-800 gap-2">Lanjut <ArrowRight className="w-4 h-4" /></Button>
             ) : (
               <Button data-testid="submit-application-button" onClick={submit} disabled={busy} className="rounded-sm bg-blue-600 hover:bg-blue-700 gap-2"><Send className="w-4 h-4" /> Kirim & Nilai Risiko</Button>
             )}
