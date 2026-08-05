@@ -19,26 +19,79 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
+import certifi
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("kyb")
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# Required at import time — missing vars crash the Vercel function on cold start
+# (FUNCTION_INVOCATION_FAILED / "Application startup failed") before any route runs.
+_REQUIRED_ENV = ("MONGO_URL", "DB_NAME", "JWT_SECRET")
+_missing_env = [k for k in _REQUIRED_ENV if not os.environ.get(k)]
+if _missing_env:
+    msg = (
+        "Missing required environment variables: "
+        + ", ".join(_missing_env)
+        + ". Set them in Vercel → Project Settings → Environment Variables "
+        "(for Production and the backend service), then redeploy."
+    )
+    logger.error(msg)
+    raise RuntimeError(msg)
 
-JWT_SECRET = os.environ['JWT_SECRET']
+mongo_url = os.environ["MONGO_URL"]
+# Atlas from Vercel/Python 3.12 often needs an explicit CA bundle (certifi).
+# Without it: SSL: TLSV1_ALERT_INTERNAL_ERROR → startup dies → fake CORS errors.
+client = AsyncIOMotorClient(
+    mongo_url,
+    tlsCAFile=certifi.where(),
+    serverSelectionTimeoutMS=8000,
+    connectTimeoutMS=8000,
+)
+db = client[os.environ["DB_NAME"]]
+
+JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
-GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
 APP_NAME = "corpscore-kyb"
 storage_key = None
+
+
+def get_cors_origins() -> List[str]:
+    """Build allow-list for browser origins (required when credentials are used)."""
+    origins: List[str] = []
+
+    def add(origin: Optional[str]) -> None:
+        if not origin:
+            return
+        cleaned = origin.strip().rstrip("/")
+        if cleaned and cleaned not in origins:
+            origins.append(cleaned)
+
+    for part in (os.environ.get("CORS_ORIGINS") or "").split(","):
+        add(part)
+    add(FRONTEND_URL)
+    # Common local / tunnel origins for CRA & alternate hosts
+    for default in (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ):
+        add(default)
+    return origins
+
+
+# Preview / hosted frontends often use dynamic subdomains; regex covers those
+# while explicit allow_origins still covers local & FRONTEND_URL.
+CORS_ORIGIN_REGEX = os.environ.get(
+    "CORS_ORIGIN_REGEX",
+    r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.(emergentagent\.com|vercel\.app)",
+)
 
 app = FastAPI(title="CorpScore KYB")
 api_router = APIRouter(prefix="/api")
@@ -48,7 +101,8 @@ def init_storage():
     global storage_key
     if storage_key:
         return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    # Short timeout: storage is optional for auth; long hangs block upload routes only.
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=8)
     resp.raise_for_status()
     storage_key = resp.json()["storage_key"]
     return storage_key
@@ -144,10 +198,6 @@ class LoginInput(BaseModel):
 
 class SessionInput(BaseModel):
     session_id: str
-
-class GoogleAuthInput(BaseModel):
-    code: str
-    redirect_uri: str
 
 class Director(BaseModel):
     name: str
@@ -398,6 +448,95 @@ def verify_bank(company: dict) -> dict:
         result["note"] = (result["note"] + " · " if result["note"] else "") + "Nama pemilik rekening tidak cocok dengan perusahaan"
     return result
 
+# ---------------- NPWP Verification (api.co.id) ----------------
+def _clean_npwp(npwp: str) -> str:
+    return "".join(ch for ch in (npwp or "") if ch.isdigit())
+
+def _npwp_verify_url() -> str:
+    base = (os.environ.get("BASE_URL_NPWP_VERIFY") or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/npwp/verify"):
+        return base
+    return f"{base}/npwp/verify"
+
+def verify_npwp(company: dict) -> dict:
+    """Verify NPWP via api.co.id POST /npwp/verify. Do not log PII."""
+    url = _npwp_verify_url()
+    api_key = (os.environ.get("API_CO_ID_KEY") or "").strip()
+    npwp = _clean_npwp(company.get("npwp", ""))
+    name = (company.get("legal_name") or "").strip()
+    address = (company.get("address") or "").strip()
+
+    result = {
+        "configured": bool(url and api_key),
+        "source": "api.co.id",
+        "is_success": False,
+        "message": "",
+        "data": None,
+        "npwp_digits": len(npwp),
+    }
+
+    if not npwp:
+        result["message"] = "NPWP belum diisi"
+        return result
+    if not (15 <= len(npwp) <= 16):
+        result["message"] = "NPWP harus 15–16 digit"
+        return result
+    if len(name) < 2:
+        result["message"] = "Nama legal perusahaan wajib diisi untuk verifikasi NPWP"
+        return result
+    if len(address) < 7:
+        result["message"] = "Alamat terdaftar minimal 7 karakter untuk verifikasi NPWP"
+        return result
+    if not result["configured"]:
+        result["message"] = "NPWP verify belum dikonfigurasi (BASE_URL_NPWP_VERIFY / API_CO_ID_KEY)"
+        return result
+
+    try:
+        r = requests.post(
+            url,
+            json={"npwp": npwp, "name": name, "address": address},
+            headers={"Content-Type": "application/json", "x-api-co-id": api_key},
+            timeout=30,
+        )
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+
+        if isinstance(body, dict):
+            result["is_success"] = bool(body.get("is_success"))
+            result["message"] = body.get("message") or ""
+            result["data"] = body.get("data")
+            if not result["message"] and isinstance(result["data"], dict):
+                result["message"] = result["data"].get("message") or ""
+        else:
+            result["message"] = "Respons provider tidak valid"
+
+        if r.status_code >= 400 and not result["message"]:
+            err_map = {
+                400: "JSON body tidak valid",
+                401: "API key hilang atau salah",
+                402: "Saldo/subscription belum cukup",
+                403: "eKYC belum approved",
+                404: "NPWP/NIK tidak ditemukan",
+                422: "Format npwp, name, atau address tidak valid",
+                502: "Provider auth/server error",
+                503: "Provider unavailable",
+                504: "Provider timeout",
+            }
+            result["message"] = err_map.get(r.status_code, f"Verifikasi gagal (HTTP {r.status_code})")
+            result["is_success"] = False
+    except requests.Timeout:
+        logger.error("NPWP verify timed out")
+        result["message"] = "Timeout saat menghubungi provider NPWP"
+    except Exception as e:
+        logger.error(f"NPWP verify failed: {type(e).__name__}")
+        result["message"] = "Gagal menghubungi layanan verifikasi NPWP"
+
+    return result
+
 # ---------------- Didit KYC/KYB (hosted sessions) ----------------
 def didit_create_session(vendor_data: str, callback_path: str, workflow_id: str = None, metadata: dict = None, expected_details: dict = None) -> dict:
     api_key = os.environ.get("DIDIT_API_KEY")
@@ -518,10 +657,16 @@ def generate_report_pdf(a: dict) -> bytes:
     el.append(Paragraph("Validasi Sistem", h2))
     nib_v = val.get("nib") or {}
     bank_v = val.get("bank") or {}
+    npwp_v = val.get("npwp") or {}
+    npwp_data = (npwp_v.get("data") or {}) if isinstance(npwp_v.get("data"), dict) else {}
+    npwp_inner = npwp_data.get("data") if isinstance(npwp_data.get("data"), dict) else {}
     vi = [["NIB valid", str(nib_v.get("valid", "-"))], ["NIB kedaluwarsa", str(nib_v.get("expired", "-"))],
           ["Registry OSS", f"{(nib_v.get('registry') or {}).get('source','-')} · {(nib_v.get('registry') or {}).get('status','-')}"],
           ["Bank", f"{bank_v.get('bank_name','-')} {bank_v.get('account_number_masked','')}"],
-          ["Bank verified", f"{bank_v.get('verified','-')} ({bank_v.get('name_match_score',0)}%) · {bank_v.get('source','-')}"]]
+          ["Bank verified", f"{bank_v.get('verified','-')} ({bank_v.get('name_match_score',0)}%) · {bank_v.get('source','-')}"],
+          ["NPWP success", str(npwp_v.get("is_success", "-"))],
+          ["NPWP message", str(npwp_data.get("message") or npwp_v.get("message") or "-")],
+          ["NPWP status WP/SPT", f"{npwp_inner.get('status_wp','-')} / {npwp_inner.get('status_spt','-')}"]]
     el.append(_pdf_table(vi, Table, TableStyle, colors))
 
     el.append(Paragraph("Screening Sanksi / PEP / Adverse Media", h2))
@@ -720,6 +865,21 @@ async def ai_extract_document(image_b64: str, doc_type: str) -> dict:
         logger.error(f"AI extract failed: {e}")
         return {"error": "AI extraction unavailable"}
 
+# ---------------- Health (lightweight — still requires successful app import) ----------------
+@api_router.get("/health")
+async def health():
+    mongo_ok = False
+    try:
+        await db.command("ping")
+        mongo_ok = True
+    except Exception as e:
+        logger.warning(f"health mongo ping failed: {e}")
+    return {
+        "ok": mongo_ok,
+        "service": "corpscore-kyb",
+        "mongo": "up" if mongo_ok else "down",
+    }
+
 # ---------------- Auth routes ----------------
 @api_router.post("/auth/register")
 async def register(inp: RegisterInput, response: Response):
@@ -747,88 +907,23 @@ async def login(inp: LoginInput, response: Response):
     set_auth_cookie(response, "access_token", token)
     return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "token": token}
 
-async def _upsert_google_user(email: str, name: str, picture: str) -> dict:
-    email = email.strip().lower()
-    user = await db.users.find_one({"email": email}, {"_id": 0})
-    if not user:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        role = "owner" if email == os.environ.get("ADMIN_EMAIL", "").lower() else "applicant"
-        user = {
-            "user_id": user_id, "email": email, "name": name or email,
-            "role": role, "picture": picture or "",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.users.insert_one(dict(user))
-    elif picture and not user.get("picture"):
-        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"picture": picture}})
-        user["picture"] = picture
-    return user
-
-async def _create_user_session(response: Response, user: dict) -> dict:
-    session_token = uuid.uuid4().hex
-    await db.user_sessions.insert_one({
-        "user_id": user["user_id"],
-        "session_token": session_token,
-        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    set_auth_cookie(response, "session_token", session_token)
-    return {
-        "user_id": user["user_id"], "email": user["email"],
-        "name": user.get("name"), "role": user.get("role"),
-        "picture": user.get("picture", ""), "token": session_token,
-    }
-
-@api_router.post("/auth/google")
-async def google_oauth(inp: GoogleAuthInput, response: Response):
-    """Exchange Google OAuth authorization code for a user session."""
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        raise HTTPException(status_code=503, detail="Google OAuth belum dikonfigurasi (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)")
-    token_resp = requests.post(GOOGLE_TOKEN_URL, data={
-        "code": inp.code,
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "redirect_uri": inp.redirect_uri,
-        "grant_type": "authorization_code",
-    }, timeout=30)
-    if token_resp.status_code != 200:
-        logger.warning("Google token exchange failed: %s", token_resp.text)
-        raise HTTPException(status_code=401, detail="Gagal menukar kode Google OAuth")
-    access_token = token_resp.json().get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Token Google tidak valid")
-    info_resp = requests.get(
-        GOOGLE_USERINFO_URL,
-        headers={"Authorization": f"Bearer {access_token}"},
-        timeout=30,
-    )
-    if info_resp.status_code != 200:
-        raise HTTPException(status_code=401, detail="Gagal mengambil profil Google")
-    info = info_resp.json()
-    email = (info.get("email") or "").strip().lower()
-    if not email:
-        raise HTTPException(status_code=401, detail="Akun Google tidak menyediakan email")
-    if info.get("email_verified") is False:
-        raise HTTPException(status_code=401, detail="Email Google belum terverifikasi")
-    user = await _upsert_google_user(email, info.get("name", email), info.get("picture", ""))
-    return await _create_user_session(response, user)
-
 @api_router.post("/auth/session")
 async def google_session(inp: SessionInput, response: Response):
-    """Legacy Emergent session bridge — kept for backward compatibility."""
     r = requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": inp.session_id}, timeout=30)
     if r.status_code != 200:
         raise HTTPException(status_code=401, detail="Sesi Google tidak valid")
     data = r.json()
-    user = await _upsert_google_user(data["email"], data.get("name", data["email"]), data.get("picture", ""))
-    session_token = data.get("session_token") or uuid.uuid4().hex
-    await db.user_sessions.insert_one({
-        "user_id": user["user_id"], "session_token": session_token,
-        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    email = data["email"].strip().lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        role = "owner" if email == os.environ.get("ADMIN_EMAIL", "").lower() else "applicant"
+        user = {"user_id": user_id, "email": email, "name": data.get("name", email), "role": role, "picture": data.get("picture", ""), "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.users.insert_one(dict(user))
+    session_token = data["session_token"]
+    await db.user_sessions.insert_one({"user_id": user["user_id"], "session_token": session_token, "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(), "created_at": datetime.now(timezone.utc).isoformat()})
     set_auth_cookie(response, "session_token", session_token)
-    return {"user_id": user["user_id"], "email": user["email"], "name": user.get("name"), "role": user.get("role"), "picture": user.get("picture", "")}
+    return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "picture": user.get("picture", "")}
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
@@ -1082,6 +1177,20 @@ async def verify_bank_endpoint(app_id: str, user: dict = Depends(get_current_use
         raise HTTPException(status_code=403, detail="Akses ditolak")
     return {"bank": verify_bank(a["company"])}
 
+@api_router.post("/applications/{app_id}/verify-npwp")
+async def verify_npwp_endpoint(app_id: str, user: dict = Depends(get_current_user)):
+    a = await db.applications.find_one({"id": app_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Aplikasi tidak ditemukan")
+    if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    npwp_val = verify_npwp(a["company"])
+    await db.applications.update_one(
+        {"id": app_id},
+        {"$set": {"npwp_check": npwp_val, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"npwp": npwp_val}
+
 @api_router.post("/applications/{app_id}/submit")
 async def submit_application(app_id: str, user: dict = Depends(get_current_user)):
     a = await db.applications.find_one({"id": app_id}, {"_id": 0})
@@ -1094,6 +1203,10 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
     company = a["company"]
     nib_val = validate_nib(company, a.get("nib_qr"))
     bank_val = verify_bank(company)
+    # Reuse prior verify-npwp result when present to avoid double-billing api.co.id
+    npwp_val = a.get("npwp_check") if isinstance(a.get("npwp_check"), dict) else None
+    if not npwp_val:
+        npwp_val = verify_npwp(company)
     hits = screen_watchlist(company)
     rule = compute_rule_score(company, hits)
     ai = await ai_risk_review(company, rule, hits)
@@ -1103,10 +1216,11 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
         "final_score": final, "risk_level": risk_level_from_score(final),
     }
     now = datetime.now(timezone.utc)
-    validation = {"nib": nib_val, "bank": bank_val}
+    validation = {"nib": nib_val, "bank": bank_val, "npwp": npwp_val}
     update = {
         "status": "under_review", "screening_hits": hits, "score": score, "ai_review": ai,
-        "validation": validation, "submitted_at": now.isoformat(), "updated_at": now.isoformat(),
+        "validation": validation, "npwp_check": npwp_val,
+        "submitted_at": now.isoformat(), "updated_at": now.isoformat(),
         "sla_due_at": None, "sla_days": None, "auto_reject_reason": None,
     }
     # Auto-rejection: NIB expired / invalid masa berlaku
@@ -1159,30 +1273,59 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     }
 
 app.include_router(api_router)
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=[FRONTEND_URL, "http://localhost:3000"], allow_methods=["*"], allow_headers=["*"])
+# CORS must wrap the app (outermost) so preflight OPTIONS and error responses get headers.
+# allow_credentials=True requires explicit origins (not "*") — matches axios withCredentials.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_origins(),
+    allow_origin_regex=CORS_ORIGIN_REGEX,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("user_id")
-    await db.applications.create_index("id")
-    await db.user_sessions.create_index("session_token")
+    # Index creation + admin seed. Non-fatal on failure so the function still serves
+    # /api/health (and clear Mongo errors) instead of FUNCTION_INVOCATION_FAILED.
     try:
-        init_storage()
-        logger.info("Storage initialized")
+        await db.command("ping")
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("user_id")
+        await db.applications.create_index("id")
+        await db.user_sessions.create_index("session_token")
+        logger.info("Mongo connected; indexes ready")
     except Exception as e:
-        logger.error(f"Storage init failed: {e}")
+        logger.error(
+            "Mongo setup failed. Verify MONGO_URL, Atlas Network Access (0.0.0.0/0 for Vercel), "
+            "and that the password is URL-encoded: %s",
+            e,
+        )
+        return
+
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "")
     if admin_email:
-        existing = await db.users.find_one({"email": admin_email})
-        if not existing:
-            await db.users.insert_one({"user_id": f"user_{uuid.uuid4().hex[:12]}", "email": admin_email, "name": "Compliance Owner", "role": "owner", "password_hash": hash_password(admin_pw), "picture": "", "created_at": datetime.now(timezone.utc).isoformat()})
-        else:
-            update = {"role": "owner"}
-            if admin_pw and not verify_password(admin_pw, existing.get("password_hash", "")):
-                update["password_hash"] = hash_password(admin_pw)
-            await db.users.update_one({"email": admin_email}, {"$set": update})
+        try:
+            existing = await db.users.find_one({"email": admin_email})
+            if not existing:
+                await db.users.insert_one({
+                    "user_id": f"user_{uuid.uuid4().hex[:12]}",
+                    "email": admin_email,
+                    "name": "Compliance Owner",
+                    "role": "owner",
+                    "password_hash": hash_password(admin_pw),
+                    "picture": "",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            else:
+                update = {"role": "owner"}
+                if admin_pw and not verify_password(admin_pw, existing.get("password_hash", "")):
+                    update["password_hash"] = hash_password(admin_pw)
+                await db.users.update_one({"email": admin_email}, {"$set": update})
+        except Exception as e:
+            logger.error(f"Admin seed failed: {e}")
 
 @app.on_event("shutdown")
 async def shutdown():
