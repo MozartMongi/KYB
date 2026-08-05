@@ -101,6 +101,8 @@ export default function ApplicationDetail() {
   const score = a.score;
   const ai = a.ai_review;
   const val = a.validation;
+  const npwpVal = val?.npwp || a.npwp_check;
+  const npwpInner = npwpVal?.data?.data;
   const slaDue = a.sla_due_at ? new Date(a.sla_due_at) : null;
   const overdue = slaDue && new Date() > slaDue && a.status === "under_review";
 
@@ -192,6 +194,28 @@ export default function ApplicationDetail() {
                   <div className="text-xs text-gray-500">Kecocokan nama: <span className="font-mono">{val.bank?.name_match_score ?? 0}%</span></div>
                   {val.bank?.note && <div className="text-xs text-gray-500 mt-1">{val.bank.note}</div>}
                 </div>
+                {npwpVal && (
+                  <div className="border border-gray-200 rounded-sm p-4" data-testid="npwp-validation">
+                    <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi NPWP</div>
+                    <div className="flex items-center gap-2">
+                      {npwpVal.is_success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <ShieldAlert className="w-4 h-4 text-amber-600" />}
+                      <span className={`font-mono text-sm font-semibold ${npwpVal.is_success ? "text-emerald-700" : "text-amber-700"}`}>
+                        {npwpVal.is_success ? "SUCCESS" : "FAILED"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">Message: <span className="font-mono">{npwpVal.data?.message || npwpVal.message || "—"}</span></div>
+                    {npwpVal.data?.transaction_id && (
+                      <div className="text-xs text-gray-500">Trx: <span className="font-mono">{npwpVal.data.transaction_id}</span></div>
+                    )}
+                    {npwpInner && (
+                      <div className="text-xs text-gray-500 mt-1 space-y-0.5">
+                        <div>Nama: <span className="font-mono">{npwpInner.name || "—"}</span></div>
+                        <div>Alamat: <span className="font-mono">{npwpInner.address || "—"}</span></div>
+                        <div>Status WP: <span className="font-mono">{npwpInner.status_wp || "—"}</span> · Status SPT: <span className="font-mono">{npwpInner.status_spt || "—"}</span></div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {a.sla_due_at && a.status === "under_review" && (
                   <div data-testid="sla-banner" className={`sm:col-span-2 flex items-center gap-2 rounded-sm p-3 border ${overdue ? "bg-red-50 border-red-200 text-red-700" : "bg-blue-50 border-blue-200 text-blue-700"}`}>
                     <CalendarClock className="w-4 h-4" />
