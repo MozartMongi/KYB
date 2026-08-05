@@ -3,53 +3,59 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
+
+/**
+ * A session_id is single-use: exchanging it twice fails. Dedupe at module scope so
+ * StrictMode's double effect (or a remount mid-exchange) reuses the first promise
+ * instead of burning the id and bouncing the user back to /login.
+ */
+const exchanges = new Map();
+
+function exchangeSession(sessionId) {
+  if (!exchanges.has(sessionId)) {
+    exchanges.set(
+      sessionId,
+      api.post("/auth/session", { session_id: sessionId }).then((r) => r.data),
+    );
+  }
+  return exchanges.get(sessionId);
+}
 
 export default function AuthCallback() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { setUser } = useAuth();
-  const processed = useRef(false);
+  const { applySession, checkAuth } = useAuth();
+  const started = useRef(false);
 
   useEffect(() => {
-    if (processed.current) return;
-    processed.current = true;
+    if (started.current) return;
+    started.current = true;
 
-    const query = new URLSearchParams(location.search || window.location.search);
-    const code = query.get("code");
-    const oauthError = query.get("error");
-
-    // Legacy Emergent hash-based session (session_id in URL fragment)
     const hash = location.hash || window.location.hash;
-    const sessionId = new URLSearchParams(hash.replace(/^#/, "")).get("session_id");
-
-    if (oauthError) {
-      navigate("/login", { replace: true });
-      return;
-    }
+    const sid = new URLSearchParams(hash.replace("#", "")).get("session_id");
 
     (async () => {
-      try {
-        if (code) {
-          const redirectUri = `${window.location.origin}/auth/callback`;
-          const { data } = await api.post("/auth/google", { code, redirect_uri: redirectUri });
-          setUser(data);
-          window.history.replaceState(null, "", "/dashboard");
+      if (sid) {
+        try {
+          applySession(await exchangeSession(sid));
           navigate("/dashboard", { replace: true });
           return;
+        } catch (e) {
+          exchanges.delete(sid);
+          console.error("Google session exchange failed", e);
         }
-        if (sessionId) {
-          const { data } = await api.post("/auth/session", { session_id: sessionId });
-          setUser(data);
-          window.history.replaceState(null, "", "/dashboard");
-          navigate("/dashboard", { replace: true });
-          return;
-        }
-        navigate("/login", { replace: true });
-      } catch {
+      }
+      // The exchange may have failed because it already succeeded (single-use id):
+      // trust the cookie/token before sending the user back to the login screen.
+      if (await checkAuth()) {
+        navigate("/dashboard", { replace: true });
+      } else {
+        toast.error("Sesi Google tidak dapat diverifikasi. Silakan masuk kembali.");
         navigate("/login", { replace: true });
       }
     })();
-  }, [location, navigate, setUser]);
+  }, [location, navigate, applySession, checkAuth]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0A0A0A] text-white">
