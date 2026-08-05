@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatApiErrorDetail, rp } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send, Landmark, BadgeCheck } from "lucide-react";
-
-const BANKS = [
-  { code: "002", name: "Bank BRI" }, { code: "008", name: "Bank Mandiri" }, { code: "009", name: "Bank BNI" },
-  { code: "014", name: "Bank BCA" }, { code: "013", name: "Bank Permata" }, { code: "011", name: "Bank Danamon" },
-  { code: "022", name: "CIMB Niaga" }, { code: "200", name: "Bank BTN" }, { code: "451", name: "Bank Syariah Indonesia" },
-];
 
 const INDUSTRIES = ["crypto_exchange","money_services","forex","fintech","trading","real_estate","ecommerce","technology","consulting","retail","logistics","mining","manufacturing","other"];
 const STEPS = [
@@ -29,11 +23,13 @@ export default function NewApplication() {
   const [step, setStep] = useState(1);
   const [appId, setAppId] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [banks, setBanks] = useState([]);
+  const [banksLoading, setBanksLoading] = useState(true);
   const [c, setC] = useState({
     legal_name: "", brand_name: "", entity_type: "PT", nib: "", nib_expiry_date: "", npwp: "", deed_number: "",
     established_year: "", industry: "crypto_exchange", country: "Indonesia", address: "", website: "",
     annual_revenue_idr: "", paid_up_capital_idr: "", expected_monthly_volume_idr: "", source_of_funds: "",
-    bank_name: "", bank_code: "002", bank_account_number: "", bank_account_holder: "",
+    bank_name: "", bank_code: "", bank_account_number: "", bank_account_holder: "",
     directors: [{ name: "", role: "Direktur Utama", id_number: "", is_pep: false, ownership_pct: "" }],
   });
   const [docs, setDocs] = useState([]);
@@ -41,6 +37,30 @@ export default function NewApplication() {
   const [npwpCheck, setNpwpCheck] = useState(null);
   const [bankCheck, setBankCheck] = useState(null);
   const [verifying, setVerifying] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setBanksLoading(true);
+      try {
+        const { data } = await api.get("/banks/available");
+        if (cancelled) return;
+        const list = Array.isArray(data?.banks) ? data.banks : [];
+        setBanks(list);
+        if (data?.source === "fallback" && data?.message) {
+          toast.message(data.message);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setBanks([]);
+          toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Gagal memuat daftar bank");
+        }
+      } finally {
+        if (!cancelled) setBanksLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const upd = (k) => (e) => setC({ ...c, [k]: e.target?.value ?? e });
   const updDir = (i, k, v) => { const d = [...c.directors]; d[i][k] = v; setC({ ...c, directors: d }); };
@@ -79,7 +99,9 @@ export default function NewApplication() {
   };
 
   const verifyBank = async () => {
+    if (!c.bank_code) { toast.error("Pilih bank terlebih dahulu"); return; }
     if (!c.bank_account_number) { toast.error("Isi nomor rekening terlebih dahulu"); return; }
+    if (!c.bank_account_holder) { toast.error("Isi nama pemilik rekening terlebih dahulu"); return; }
     setVerifying(true);
     try {
       const id = await ensureApp();
@@ -298,19 +320,38 @@ export default function NewApplication() {
                 <div className="font-head font-bold text-sm mb-3">Rekening Bank Perusahaan</div>
               </div>
               <Field label="Bank">
-                <Select value={c.bank_code} onValueChange={(v) => { const b = BANKS.find((x) => x.code === v); setC({ ...c, bank_code: v, bank_name: b ? b.name : c.bank_name }); }}>
-                  <SelectTrigger className="rounded-sm" data-testid="bank-code-select"><SelectValue placeholder="Pilih bank" /></SelectTrigger>
-                  <SelectContent>{BANKS.map((b) => <SelectItem key={b.code} value={b.code}>{b.name} ({b.code})</SelectItem>)}</SelectContent>
+                <Select
+                  value={c.bank_code || undefined}
+                  onValueChange={(v) => {
+                    const b = banks.find((x) => x.code === v);
+                    setC({ ...c, bank_code: v, bank_name: b ? b.name : c.bank_name });
+                  }}
+                  disabled={banksLoading || banks.length === 0}
+                >
+                  <SelectTrigger className="rounded-sm" data-testid="bank-code-select">
+                    <SelectValue placeholder={banksLoading ? "Memuat daftar bank…" : "Pilih bank"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {banks.map((b) => (
+                      <SelectItem key={b.code} value={b.code}>{b.name} ({b.code})</SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </Field>
               <Field label="Nomor Rekening"><Input data-testid="bank-account-number-input" value={c.bank_account_number} onChange={upd("bank_account_number")} className="rounded-sm font-mono" /></Field>
-              <div className="sm:col-span-2"><Field label="Nama Pemilik Rekening" hint="Diverifikasi otomatis via BRIAPI Account Name Validation"><Input data-testid="bank-account-holder-input" value={c.bank_account_holder} onChange={upd("bank_account_holder")} className="rounded-sm" placeholder="PT Contoh Kripto Nusantara" /></Field></div>
+              <div className="sm:col-span-2"><Field label="Nama Pemilik Rekening" hint="Diverifikasi via api.co.id Bank Validation"><Input data-testid="bank-account-holder-input" value={c.bank_account_holder} onChange={upd("bank_account_holder")} className="rounded-sm" placeholder="PT Contoh Kripto Nusantara" /></Field></div>
               <div className="sm:col-span-2">
                 <Button data-testid="verify-bank-button" type="button" variant="outline" onClick={verifyBank} disabled={verifying} className="rounded-sm gap-2"><Landmark className="w-4 h-4" /> {verifying ? "Memverifikasi…" : "Verifikasi Rekening (Name Check)"}</Button>
                 {bankCheck && (
                   <div data-testid="bank-check-result" className={`mt-3 text-sm border rounded-sm p-3 ${bankCheck.verified ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
                     <div>Status: <b>{(bankCheck.status || "").toUpperCase()}</b> · Sumber: <span className="font-mono">{bankCheck.source}</span></div>
                     <div>Nama sesuai bank: <span className="font-mono">{bankCheck.resolved_name || "—"}</span> · Kecocokan: <span className="font-mono">{bankCheck.name_match_score}%</span></div>
+                    {bankCheck.provider?.data && (
+                      <div className="text-xs mt-1 font-mono">
+                        Valid: {String(bankCheck.provider.data.is_valid)} · Score: {bankCheck.provider.data.score ?? "—"}
+                        {bankCheck.provider.data.message ? ` · ${bankCheck.provider.data.message}` : ""}
+                      </div>
+                    )}
                     <div className="text-xs mt-1">{bankCheck.note}</div>
                   </div>
                 )}
