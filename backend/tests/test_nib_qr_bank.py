@@ -173,7 +173,9 @@ class TestVerifyBank:
         assert b["status"] == "verified"
         assert b["resolved_name"] == legal
         assert b["name_match_score"] >= 50
-        assert b["account_number_masked"].startswith("••••")
+        assert b["account_number_masked"].endswith("7890")
+        assert b["account_number_masked"].startswith("*")
+        assert set(b["account_number_masked"][:-4]) <= {"*"}
 
     def test_bank_verify_simulasi_mismatch(self, applicant):
         aid = _create(applicant, holder="Totally Unrelated Name Zzz")
