@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { RiskBadge, StatusBadge } from "@/components/kyb";
 import { Button } from "@/components/ui/button";
 import { FilePlus2, Building2, AlertTriangle, Clock, TrendingUp } from "lucide-react";
+
+import { APPLICATIONS_QUERY_KEY, DASHBOARD_STATS_QUERY_KEY } from "@/lib/queryKeys";
 
 function Stat({ label, value, sub, icon: Icon, accent }) {
   return (
@@ -22,14 +24,22 @@ function Stat({ label, value, sub, icon: Icon, accent }) {
 export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [apps, setApps] = useState([]);
-  const [stats, setStats] = useState(null);
   const isOfficer = user?.role === "owner" || user?.role === "officer";
 
-  useEffect(() => {
-    api.get("/applications").then((r) => setApps(r.data)).catch(() => {});
-    api.get("/dashboard/stats").then((r) => setStats(r.data)).catch(() => {});
-  }, []);
+  // Always refetch when entering Dashboard so new/submitted apps appear without a hard refresh.
+  const { data: apps = [] } = useQuery({
+    queryKey: APPLICATIONS_QUERY_KEY,
+    queryFn: async () => (await api.get("/applications")).data,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+
+  const { data: stats } = useQuery({
+    queryKey: DASHBOARD_STATS_QUERY_KEY,
+    queryFn: async () => (await api.get("/dashboard/stats")).data,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
 
   return (
     <div className="animate-fade-up">
