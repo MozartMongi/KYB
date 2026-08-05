@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, formatApiErrorDetail, rp } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { RiskBadge, StatusBadge, ScoreGauge, FactorBar } from "@/components/kyb";
@@ -7,10 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { ArrowLeft, ShieldAlert, Sparkles, CheckCircle2, XCircle, Building2, Users, FileText, BadgeCheck, CalendarClock, Ban, ShieldCheck, ExternalLink, RefreshCw, FileDown } from "lucide-react";
+import { APPLICATIONS_QUERY_KEY, DASHBOARD_STATS_QUERY_KEY } from "@/lib/queryKeys";
 
 export default function ApplicationDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user } = useAuth();
   const [a, setA] = useState(null);
   const [note, setNote] = useState("");
@@ -64,6 +67,8 @@ export default function ApplicationDetail() {
       await api.post(`/applications/${id}/decision`, { decision, note });
       toast.success(decision === "approved" ? "Aplikasi disetujui" : "Aplikasi ditolak");
       load();
+      queryClient.invalidateQueries({ queryKey: APPLICATIONS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_STATS_QUERY_KEY });
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setBusy(false); }
   };
