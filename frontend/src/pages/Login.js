@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, formatApiErrorDetail } from "@/lib/api";
+import { api, formatAxiosError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { ShieldCheck, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Login() {
-  const { setUser } = useAuth();
+  const { applySession } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ email: "", password: "", name: "" });
@@ -23,32 +23,20 @@ export default function Login() {
     try {
       const path = mode === "login" ? "/auth/login" : "/auth/register";
       const { data } = await api.post(path, form);
-      setUser(data);
+      applySession(data);
       toast.success("Berhasil masuk");
-      navigate("/dashboard");
+      navigate("/dashboard", { replace: true });
     } catch (err) {
-      toast.error(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+      toast.error(formatAxiosError(err));
     } finally {
       setLoading(false);
     }
   };
 
   const googleLogin = () => {
-    const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
-    if (!clientId) {
-      toast.error("Google OAuth belum dikonfigurasi (REACT_APP_GOOGLE_CLIENT_ID)");
-      return;
-    }
-    const redirectUri = `${window.location.origin}/auth/callback`;
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: "code",
-      scope: "openid email profile",
-      access_type: "online",
-      prompt: "select_account",
-    });
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    const redirectUrl = window.location.origin + "/dashboard";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
   };
 
   return (
