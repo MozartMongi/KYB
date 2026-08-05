@@ -192,6 +192,11 @@ export default function ApplicationDetail() {
                   <div className="text-xs text-gray-500 mt-1">{val.bank?.bank_name || "—"} · <span className="font-mono">{val.bank?.account_number_masked || "—"}</span></div>
                   <div className="text-xs text-gray-500">Sumber: <span className="font-mono">{val.bank?.source || "—"}</span>{val.bank?.resolved_name ? <> · Nama bank: <span className="font-mono">{val.bank.resolved_name}</span></> : null}</div>
                   <div className="text-xs text-gray-500">Kecocokan nama: <span className="font-mono">{val.bank?.name_match_score ?? 0}%</span></div>
+                  {val.bank?.provider?.data?.message && (
+                    <div className="text-xs text-gray-500">Provider: <span className="font-mono">{val.bank.provider.data.message}</span>
+                      {val.bank.provider.data.score != null ? <> · score {val.bank.provider.data.score}</> : null}
+                    </div>
+                  )}
                   {val.bank?.note && <div className="text-xs text-gray-500 mt-1">{val.bank.note}</div>}
                 </div>
                 {npwpVal && (
