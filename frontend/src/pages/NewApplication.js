@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, formatApiErrorDetail, rp } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send, BadgeCheck, Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { APPLICATIONS_QUERY_KEY, DASHBOARD_STATS_QUERY_KEY } from "@/lib/queryKeys";
 
 const INDUSTRIES = ["crypto_exchange","money_services","forex","fintech","trading","real_estate","ecommerce","technology","consulting","retail","logistics","mining","manufacturing","other"];
 const STEPS = [
@@ -39,6 +41,7 @@ function stepComplete(step, c) {
 
 export default function NewApplication() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
   const [appId, setAppId] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -161,6 +164,10 @@ export default function NewApplication() {
       const id = await ensureApp();
       toast.loading("Memverifikasi NPWP & rekening, lalu menjalankan screening & credit scoring…", { id: "sub" });
       await api.post(`/applications/${id}/submit`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: APPLICATIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: DASHBOARD_STATS_QUERY_KEY }),
+      ]);
       toast.success("Aplikasi dikirim. Hasil verifikasi siap ditinjau.", { id: "sub" });
       navigate(`/applications/${id}`);
     } catch (e) {
