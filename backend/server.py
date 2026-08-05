@@ -357,57 +357,126 @@ def _name_similarity(a: str, b: str) -> float:
         return 0.0
     return len(ta & tb) / max(len(ta), len(tb))
 
-# ---------------- BRIAPI Account Name Validation (name-check) ----------------
-_bri_token_cache = {"token": None, "exp": 0.0}
+# ---------------- api.co.id (NPWP + Bank Validation) ----------------
+_FALLBACK_BANKS = [
+    {"code": "bank_bri", "name": "BRI"},
+    {"code": "bank_mandiri", "name": "MANDIRI"},
+    {"code": "bank_bni", "name": "BNI"},
+    {"code": "bank_bca", "name": "BCA"},
+    {"code": "bank_permata", "name": "PERMATA"},
+    {"code": "bank_danamon", "name": "DANAMON"},
+    {"code": "bank_cimb", "name": "CIMB NIAGA"},
+    {"code": "bank_btn", "name": "BTN"},
+    {"code": "bank_bsi", "name": "BSI"},
+]
 
-def _bri_get_token():
-    cid = os.environ.get("BRI_CLIENT_ID")
-    csec = os.environ.get("BRI_CLIENT_SECRET")
-    base = os.environ.get("BRI_BASE_URL", "https://sandbox.partner.api.bri.co.id")
-    if not (cid and csec):
-        return None
-    now = time.time()
-    if _bri_token_cache["token"] and _bri_token_cache["exp"] > now + 30:
-        return _bri_token_cache["token"]
-    basic = base64.b64encode(f"{cid}:{csec}".encode()).decode()
-    r = requests.post(
-        f"{base}/oauth/client_credential/accesstoken", params={"grant_type": "client_credentials"},
-        headers={"Authorization": f"Basic {basic}", "Content-Type": "application/x-www-form-urlencoded"}, timeout=20,
-    )
-    r.raise_for_status()
-    d = r.json()
-    _bri_token_cache["token"] = d.get("access_token")
-    _bri_token_cache["exp"] = now + int(d.get("expires_in", 300) or 300)
-    return _bri_token_cache["token"]
+def _api_co_id_base() -> str:
+    return (os.environ.get("BASE_URL_API_CO_ID") or "").strip().rstrip("/")
 
-def _bri_signature(path: str, verb: str, token: str, timestamp: str, body: str, secret: str) -> str:
-    import hmac, hashlib
-    payload = f"path={path}&verb={verb}&token=Bearer {token}&timestamp={timestamp}&body={body}"
-    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+def _api_co_id_key() -> str:
+    return (os.environ.get("API_CO_ID_KEY") or "").strip()
 
-def bri_name_validation(bank_code: str, account_number: str) -> dict:
-    cid = os.environ.get("BRI_CLIENT_ID")
-    csec = os.environ.get("BRI_CLIENT_SECRET")
-    base = os.environ.get("BRI_BASE_URL", "https://sandbox.partner.api.bri.co.id")
-    if not (cid and csec):
-        return {"source": "SIMULASI", "configured": False, "success": False}
+def _api_co_id_configured() -> bool:
+    return bool(_api_co_id_base() and _api_co_id_key())
+
+def _api_co_id_headers(json_body: bool = True) -> dict:
+    headers = {"x-api-co-id": _api_co_id_key()}
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+def _api_co_id_url(path: str) -> str:
+    base = _api_co_id_base()
+    if not base:
+        return ""
+    path = path if path.startswith("/") else f"/{path}"
+    return f"{base}{path}"
+
+def fetch_available_banks() -> dict:
+    """GET /validation/bank/available — daftar bank yang didukung api.co.id."""
+    url = _api_co_id_url("/validation/bank/available")
+    if not _api_co_id_configured():
+        return {"configured": False, "source": "fallback", "banks": list(_FALLBACK_BANKS), "total": len(_FALLBACK_BANKS),
+                "message": "api.co.id belum dikonfigurasi — memakai daftar bank fallback"}
     try:
-        token = _bri_get_token()
-        path = "/v1.0/validation-account/name-validate"
-        body = json.dumps({"bankCode": bank_code or "014", "accountNumber": account_number}, separators=(",", ":"))
-        n = datetime.now(timezone.utc)
-        ts = n.strftime("%Y-%m-%dT%H:%M:%S.") + f"{n.microsecond // 1000:03d}Z"
-        sig = _bri_signature(path, "POST", token, ts, body, csec)
-        r = requests.post(f"{base}{path}", data=body, headers={
-            "Authorization": f"Bearer {token}", "BRI-Timestamp": ts, "BRI-Signature": sig, "Content-Type": "application/json"}, timeout=25)
-        d = r.json()
-        ok = d.get("responseCode") == "0000"
-        return {"source": "BRIAPI", "configured": True, "success": ok, "response_code": d.get("responseCode"),
-                "response_description": d.get("responseDescription"), "account_name": (d.get("data") or {}).get("accountName", ""),
-                "error": d.get("errorDescription", "")}
+        r = requests.get(url, headers=_api_co_id_headers(json_body=False), timeout=25)
+        body = r.json() if r.content else {}
+        if r.status_code >= 400:
+            logger.error(f"api.co.id available banks HTTP {r.status_code}")
+            return {"configured": True, "source": "fallback", "banks": list(_FALLBACK_BANKS), "total": len(_FALLBACK_BANKS),
+                    "message": "Gagal memuat daftar bank dari provider — memakai fallback"}
+        data = body.get("data") if isinstance(body, dict) else None
+        raw_banks = []
+        if isinstance(data, dict):
+            raw_banks = data.get("banks") or []
+            total = data.get("total")
+        elif isinstance(data, list):
+            raw_banks = data
+            total = len(data)
+        else:
+            raw_banks, total = [], 0
+        banks = []
+        for b in raw_banks:
+            if not isinstance(b, dict):
+                continue
+            code = (b.get("bank_code") or b.get("code") or "").strip()
+            name = (b.get("bank_name") or b.get("name") or code).strip()
+            if code:
+                banks.append({"code": code, "name": name})
+        if not banks:
+            return {"configured": True, "source": "fallback", "banks": list(_FALLBACK_BANKS), "total": len(_FALLBACK_BANKS),
+                    "message": "Daftar bank kosong dari provider — memakai fallback"}
+        return {"configured": True, "source": "api.co.id", "banks": banks, "total": total or len(banks),
+                "message": body.get("message") if isinstance(body, dict) else "Success"}
     except Exception as e:
-        logger.error(f"BRIAPI name validation failed: {e}")
-        return {"source": "BRIAPI", "configured": True, "success": False, "error": str(e)}
+        logger.error(f"api.co.id available banks failed: {type(e).__name__}")
+        return {"configured": True, "source": "fallback", "banks": list(_FALLBACK_BANKS), "total": len(_FALLBACK_BANKS),
+                "message": "Gagal menghubungi provider — memakai daftar bank fallback"}
+
+def api_co_id_bank_validation(bank_code: str, account_number: str, account_name: str) -> dict:
+    """POST /validation/bank — validasi rekening via api.co.id."""
+    url = _api_co_id_url("/validation/bank")
+    if not _api_co_id_configured():
+        return {"configured": False, "source": "SIMULASI", "success": False}
+    try:
+        r = requests.post(
+            url,
+            json={"bank_code": bank_code, "account_number": account_number, "account_name": account_name},
+            headers=_api_co_id_headers(),
+            timeout=30,
+        )
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, dict):
+            data = {}
+        if r.status_code >= 400:
+            return {
+                "configured": True, "source": "api.co.id", "success": False,
+                "is_success": False,
+                "message": (body.get("message") if isinstance(body, dict) else None) or f"HTTP {r.status_code}",
+                "data": data, "error": (body.get("message") if isinstance(body, dict) else None) or f"HTTP {r.status_code}",
+            }
+        return {
+            "configured": True, "source": "api.co.id",
+            "success": bool(body.get("is_success")) if isinstance(body, dict) else False,
+            "is_success": bool(body.get("is_success")) if isinstance(body, dict) else False,
+            "message": body.get("message") if isinstance(body, dict) else "",
+            "data": data,
+            "is_valid": bool(data.get("is_valid")),
+            "score": data.get("score"),
+            "account_name": data.get("name") or "",
+            "provider_message": data.get("message") or "",
+            "provider_note": data.get("note") or "",
+        }
+    except requests.Timeout:
+        logger.error("api.co.id bank validation timed out")
+        return {"configured": True, "source": "api.co.id", "success": False, "error": "Timeout provider"}
+    except Exception as e:
+        logger.error(f"api.co.id bank validation failed: {type(e).__name__}")
+        return {"configured": True, "source": "api.co.id", "success": False, "error": "Gagal menghubungi provider"}
 
 def verify_bank(company: dict) -> dict:
     bank_code = (company.get("bank_code") or "").strip()
@@ -416,60 +485,80 @@ def verify_bank(company: dict) -> dict:
     holder = (company.get("bank_account_holder") or "").strip()
     legal = company.get("legal_name", "")
     brand = company.get("brand_name", "")
-    result = {"bank_name": name, "bank_code": bank_code,
-              "account_number_masked": ("•••• " + acc[-4:]) if len(acc) >= 4 else acc,
-              "declared_holder": holder, "resolved_name": "", "verified": False,
-              "name_match_score": 0, "status": "unverified", "note": "", "source": "SIMULASI"}
+    result = {
+        "bank_name": name, "bank_code": bank_code,
+        "account_number_masked": ("•••• " + acc[-4:]) if len(acc) >= 4 else acc,
+        "declared_holder": holder, "resolved_name": "", "verified": False,
+        "name_match_score": 0, "status": "unverified", "note": "", "source": "SIMULASI",
+        "provider": None,
+    }
     if not acc:
         result["note"] = "Nomor rekening tidak diisi"
         return result
-    bri = bri_name_validation(bank_code, acc)
-    if bri.get("configured"):
-        result["source"] = "BRIAPI"
-        if not bri.get("success"):
+    if not bank_code:
+        result["note"] = "Kode bank belum dipilih"
+        return result
+    if not holder:
+        result["note"] = "Nama pemilik rekening belum diisi"
+        return result
+
+    provider = api_co_id_bank_validation(bank_code, acc, holder)
+    result["provider"] = {
+        "is_success": provider.get("is_success"),
+        "message": provider.get("message"),
+        "data": provider.get("data"),
+    }
+
+    if provider.get("configured"):
+        result["source"] = "api.co.id"
+        if not provider.get("success") and provider.get("error"):
             result["status"] = "failed"
-            result["note"] = bri.get("error") or bri.get("response_description") or "Inquiry rekening gagal"
+            result["note"] = provider.get("error") or provider.get("message") or "Inquiry rekening gagal"
             return result
-        resolved = bri.get("account_name", "") or ""
-    else:
-        # BRIAPI belum dikonfigurasi → mode simulasi memakai nama pemilik yang dideklarasikan
-        resolved = holder
-        result["note"] = "BRIAPI belum dikonfigurasi — verifikasi simulasi"
+        data = provider.get("data") or {}
+        is_valid = bool(data.get("is_valid") if "is_valid" in data else provider.get("is_valid"))
+        score = data.get("score")
+        try:
+            score_f = float(score) if score is not None else 0.0
+        except (TypeError, ValueError):
+            score_f = 0.0
+        # Provider score is 0–10 (≥7 valid); expose as 0–100 for existing UI
+        result["name_match_score"] = round(score_f * 10)
+        result["resolved_name"] = data.get("name") or provider.get("account_name") or ""
+        result["verified"] = is_valid
+        result["status"] = "verified" if is_valid else "mismatch"
+        msg = data.get("message") or provider.get("provider_message") or provider.get("message") or ""
+        note = data.get("note") or provider.get("provider_note") or ""
+        result["note"] = " · ".join(x for x in (msg, note) if x) or ("Rekening valid" if is_valid else "Validasi rekening gagal")
+        return result
+
+    # api.co.id belum dikonfigurasi → simulasi: cocokkan nama pemilik vs nama perusahaan
+    resolved = holder
+    result["note"] = "api.co.id belum dikonfigurasi — verifikasi simulasi"
     result["resolved_name"] = resolved
     sim = max(_name_similarity(resolved, legal), _name_similarity(resolved, brand))
     result["name_match_score"] = round(sim * 100)
     if sim >= 0.5:
         result["verified"] = True
         result["status"] = "verified"
-        if not result["note"] or result["note"].startswith("BRIAPI belum"):
-            result["note"] = (result["note"] + " · " if result["note"] else "") + "Nama pemilik rekening cocok"
+        result["note"] = result["note"] + " · Nama pemilik rekening cocok"
     else:
         result["status"] = "mismatch"
-        result["note"] = (result["note"] + " · " if result["note"] else "") + "Nama pemilik rekening tidak cocok dengan perusahaan"
+        result["note"] = result["note"] + " · Nama pemilik rekening tidak cocok dengan perusahaan"
     return result
 
-# ---------------- NPWP Verification (api.co.id) ----------------
 def _clean_npwp(npwp: str) -> str:
     return "".join(ch for ch in (npwp or "") if ch.isdigit())
 
-def _npwp_verify_url() -> str:
-    base = (os.environ.get("BASE_URL_NPWP_VERIFY") or "").strip().rstrip("/")
-    if not base:
-        return ""
-    if base.endswith("/npwp/verify"):
-        return base
-    return f"{base}/npwp/verify"
-
 def verify_npwp(company: dict) -> dict:
     """Verify NPWP via api.co.id POST /npwp/verify. Do not log PII."""
-    url = _npwp_verify_url()
-    api_key = (os.environ.get("API_CO_ID_KEY") or "").strip()
+    url = _api_co_id_url("/npwp/verify")
     npwp = _clean_npwp(company.get("npwp", ""))
     name = (company.get("legal_name") or "").strip()
     address = (company.get("address") or "").strip()
 
     result = {
-        "configured": bool(url and api_key),
+        "configured": _api_co_id_configured(),
         "source": "api.co.id",
         "is_success": False,
         "message": "",
@@ -490,14 +579,14 @@ def verify_npwp(company: dict) -> dict:
         result["message"] = "Alamat terdaftar minimal 7 karakter untuk verifikasi NPWP"
         return result
     if not result["configured"]:
-        result["message"] = "NPWP verify belum dikonfigurasi (BASE_URL_NPWP_VERIFY / API_CO_ID_KEY)"
+        result["message"] = "api.co.id belum dikonfigurasi (BASE_URL_API_CO_ID / API_CO_ID_KEY)"
         return result
 
     try:
         r = requests.post(
             url,
             json={"npwp": npwp, "name": name, "address": address},
-            headers={"Content-Type": "application/json", "x-api-co-id": api_key},
+            headers=_api_co_id_headers(),
             timeout=30,
         )
         try:
@@ -1176,6 +1265,11 @@ async def verify_bank_endpoint(app_id: str, user: dict = Depends(get_current_use
     if user.get("role") not in ("owner", "officer") and a["applicant_user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Akses ditolak")
     return {"bank": verify_bank(a["company"])}
+
+@api_router.get("/banks/available")
+async def banks_available(user: dict = Depends(get_current_user)):
+    """Proxy ke GET /validation/bank/available (api.co.id)."""
+    return fetch_available_banks()
 
 @api_router.post("/applications/{app_id}/verify-npwp")
 async def verify_npwp_endpoint(app_id: str, user: dict = Depends(get_current_user)):
