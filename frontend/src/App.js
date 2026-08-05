@@ -1,6 +1,6 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { AuthProvider, hasPendingOAuthSession, useAuth } from "@/context/AuthContext";
 import { Toaster } from "sonner";
 import AuthCallback from "@/pages/AuthCallback";
 import Login from "@/pages/Login";
@@ -25,14 +25,20 @@ function Protected({ children }) {
   return <Layout>{children}</Layout>;
 }
 
+/** Signed-in users have no business on /login — send them straight to the dashboard. */
+function GuestOnly({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <Loader />;
+  if (user) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
 function AppRouter() {
   const location = useLocation();
-  // Legacy Emergent OAuth returns session_id in the URL hash on any path
-  if (location.hash?.includes("session_id=")) return <AuthCallback />;
+  if (hasPendingOAuthSession(location)) return <AuthCallback />;
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
       <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
       <Route path="/applications/new" element={<Protected><NewApplication /></Protected>} />
       <Route path="/applications/:id" element={<Protected><ApplicationDetail /></Protected>} />
