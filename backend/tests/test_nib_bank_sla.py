@@ -1,4 +1,4 @@
-"""New feature tests: NIB expiry auto-reject, bank verification, SLA queue."""
+"""NIB format auto-reject, bank verification, SLA queue."""
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -46,7 +46,6 @@ def _base_payload(**overrides):
         "brand_name": "Nusantara",
         "entity_type": "PT",
         "nib": "1234567890123",
-        "nib_expiry_date": "2030-12-31",
         "npwp": "01.234.567.8-901.000",
         "deed_number": "AHU-123",
         "established_year": 2020,
@@ -66,10 +65,10 @@ def _base_payload(**overrides):
 
 
 class TestAutoReject:
-    """NIB expired → status auto_rejected with reason."""
+    """Invalid / missing NIB → status auto_rejected with reason."""
 
-    def test_expired_nib_auto_rejects(self, applicant):
-        payload = _base_payload(nib_expiry_date="2023-01-01")
+    def test_invalid_nib_format_auto_rejects(self, applicant):
+        payload = _base_payload(nib="123")
         r = applicant.post(f"{API}/applications", json=payload)
         assert r.status_code == 200
         aid = r.json()["id"]
@@ -78,16 +77,13 @@ class TestAutoReject:
         d = r2.json()
         assert d["status"] == "auto_rejected"
         assert d["decision"] == "auto_rejected"
-        assert "kedaluwarsa" in (d.get("auto_reject_reason") or "").lower()
+        assert "format" in (d.get("auto_reject_reason") or "").lower()
         assert d["decided_by"].startswith("SYSTEM")
-        # validation card
-        assert d["validation"]["nib"]["expired"] == True
         assert d["validation"]["nib"]["valid"] == False
-        # No SLA when auto-rejected
         assert d.get("sla_due_at") in (None, "")
 
-    def test_missing_nib_expiry_auto_rejects(self, applicant):
-        payload = _base_payload(nib_expiry_date="")
+    def test_missing_nib_auto_rejects(self, applicant):
+        payload = _base_payload(nib="")
         r = applicant.post(f"{API}/applications", json=payload)
         aid = r.json()["id"]
         r2 = applicant.post(f"{API}/applications/{aid}/submit")
@@ -97,13 +93,10 @@ class TestAutoReject:
         assert d["validation"]["nib"]["valid"] == False
 
     def test_owner_cannot_decide_auto_rejected(self, owner, applicant):
-        # Create + submit expired
-        payload = _base_payload(nib_expiry_date="2020-05-05")
+        payload = _base_payload(nib="999")
         r = applicant.post(f"{API}/applications", json=payload)
         aid = r.json()["id"]
         applicant.post(f"{API}/applications/{aid}/submit")
-        # Owner attempts decision - endpoint doesn't block on status, but frontend hides buttons.
-        # We just verify status is auto_rejected and the auto-reject fields set.
         r3 = owner.get(f"{API}/applications/{aid}")
         d = r3.json()
         assert d["status"] == "auto_rejected"
@@ -113,7 +106,7 @@ class TestValidNibSlaQueue:
     """Valid NIB → under_review with SLA 3 business days + bank verified."""
 
     def test_valid_nib_goes_to_under_review_with_sla(self, applicant):
-        payload = _base_payload(nib_expiry_date="2030-12-31")
+        payload = _base_payload()
         r = applicant.post(f"{API}/applications", json=payload)
         aid = r.json()["id"]
         r2 = applicant.post(f"{API}/applications/{aid}/submit")
@@ -142,7 +135,9 @@ class TestValidNibSlaQueue:
         assert bank["verified"] == True
         assert bank["status"] == "verified"
         assert bank["name_match_score"] >= 50
-        assert bank["account_number_masked"].startswith("••••")
+        assert bank["account_number_masked"].endswith("7890")
+        assert bank["account_number_masked"].startswith("*")
+        assert set(bank["account_number_masked"][:-4]) <= {"*"}
 
     def test_bank_verification_mismatch(self, applicant):
         payload = _base_payload(bank_account_holder="Someone Completely Unrelated Xyz")
@@ -156,7 +151,7 @@ class TestValidNibSlaQueue:
         assert bank["name_match_score"] < 50
 
     def test_persistence_via_get(self, owner, applicant):
-        payload = _base_payload(nib_expiry_date="2029-06-15")
+        payload = _base_payload()
         r = applicant.post(f"{API}/applications", json=payload)
         aid = r.json()["id"]
         applicant.post(f"{API}/applications/{aid}/submit")
