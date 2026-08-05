@@ -102,7 +102,8 @@ export default function ApplicationDetail() {
   const ai = a.ai_review;
   const val = a.validation;
   const npwpVal = val?.npwp || a.npwp_check;
-  const npwpInner = npwpVal?.data?.data;
+  // api.co.id nests detail under data.data; fall back to data when already flattened
+  const npwpInner = npwpVal?.data?.data || (npwpVal?.data?.name || npwpVal?.data?.address ? npwpVal.data : null);
   const slaDue = a.sla_due_at ? new Date(a.sla_due_at) : null;
   const overdue = slaDue && new Date() > slaDue && a.status === "under_review";
 
@@ -171,10 +172,9 @@ export default function ApplicationDetail() {
                   <div className="flex items-center gap-2">
                     {val.nib?.valid ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Ban className="w-4 h-4 text-red-600" />}
                     <span className={`font-mono text-sm font-semibold ${val.nib?.valid ? "text-emerald-700" : "text-red-700"}`}>
-                      {val.nib?.valid ? "VALID" : val.nib?.expired ? "KEDALUWARSA" : "TIDAK VALID"}
+                      {val.nib?.valid ? "VALID" : "TIDAK VALID"}
                     </span>
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">Masa berlaku: <span className="font-mono">{val.nib?.nib_expiry_date || "—"}</span></div>
                   {val.nib?.qr && val.nib.qr.success && (
                     <div className="text-xs text-gray-500 mt-1">QR: <span className="font-mono">{val.nib.qr.domain_valid ? "oss.go.id ✓" : "domain tidak valid"}</span> · NIB {val.nib.qr.matches_input ? "cocok" : "tidak cocok"}</div>
                   )}
@@ -185,39 +185,55 @@ export default function ApplicationDetail() {
                 </div>
                 <div className="border border-gray-200 rounded-sm p-4" data-testid="bank-validation">
                   <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi Rekening Bank</div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 mb-3">
                     {val.bank?.verified ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <ShieldAlert className="w-4 h-4 text-amber-600" />}
                     <span className={`font-mono text-sm font-semibold ${val.bank?.verified ? "text-emerald-700" : "text-amber-700"}`}>{(val.bank?.status || "unverified").toUpperCase()}</span>
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">{val.bank?.bank_name || "—"} · <span className="font-mono">{val.bank?.account_number_masked || "—"}</span></div>
-                  <div className="text-xs text-gray-500">Sumber: <span className="font-mono">{val.bank?.source || "—"}</span>{val.bank?.resolved_name ? <> · Nama bank: <span className="font-mono">{val.bank.resolved_name}</span></> : null}</div>
-                  <div className="text-xs text-gray-500">Kecocokan nama: <span className="font-mono">{val.bank?.name_match_score ?? 0}%</span></div>
-                  {val.bank?.provider?.data?.message && (
-                    <div className="text-xs text-gray-500">Provider: <span className="font-mono">{val.bank.provider.data.message}</span>
-                      {val.bank.provider.data.score != null ? <> · score {val.bank.provider.data.score}</> : null}
+                  <div className="space-y-1.5 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500 shrink-0">Nama rekening</span>
+                      <span className="font-mono text-right text-gray-900">{val.bank?.resolved_name || val.bank?.declared_holder || "—"}</span>
                     </div>
-                  )}
-                  {val.bank?.note && <div className="text-xs text-gray-500 mt-1">{val.bank.note}</div>}
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500 shrink-0">Nama bank</span>
+                      <span className="font-mono text-right text-gray-900">{val.bank?.bank_name || "—"}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-500 shrink-0">Nomor rekening</span>
+                      <span className="font-mono text-right text-gray-900 tracking-wider">{val.bank?.account_number_masked || "—"}</span>
+                    </div>
+                  </div>
+                  {val.bank?.note && <div className="text-xs text-gray-500 mt-3 pt-2 border-t border-gray-100">{val.bank.note}</div>}
                 </div>
                 {npwpVal && (
                   <div className="border border-gray-200 rounded-sm p-4" data-testid="npwp-validation">
                     <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi NPWP</div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 mb-3">
                       {npwpVal.is_success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <ShieldAlert className="w-4 h-4 text-amber-600" />}
                       <span className={`font-mono text-sm font-semibold ${npwpVal.is_success ? "text-emerald-700" : "text-amber-700"}`}>
                         {npwpVal.is_success ? "SUCCESS" : "FAILED"}
                       </span>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">Message: <span className="font-mono">{npwpVal.data?.message || npwpVal.message || "—"}</span></div>
-                    {npwpVal.data?.transaction_id && (
-                      <div className="text-xs text-gray-500">Trx: <span className="font-mono">{npwpVal.data.transaction_id}</span></div>
-                    )}
-                    {npwpInner && (
-                      <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-                        <div>Nama: <span className="font-mono">{npwpInner.name || "—"}</span></div>
-                        <div>Alamat: <span className="font-mono">{npwpInner.address || "—"}</span></div>
-                        <div>Status WP: <span className="font-mono">{npwpInner.status_wp || "—"}</span> · Status SPT: <span className="font-mono">{npwpInner.status_spt || "—"}</span></div>
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Nama</span>
+                        <span className="font-mono text-right text-gray-900">{npwpInner?.name || "—"}</span>
                       </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Alamat</span>
+                        <span className="font-mono text-right text-gray-900">{npwpInner?.address || "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Status WP</span>
+                        <span className="font-mono text-right text-gray-900">{npwpInner?.status_wp || "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Status SPT</span>
+                        <span className="font-mono text-right text-gray-900">{npwpInner?.status_spt || "—"}</span>
+                      </div>
+                    </div>
+                    {(npwpVal.data?.message || npwpVal.message) && (
+                      <div className="text-xs text-gray-500 mt-3 pt-2 border-t border-gray-100">{npwpVal.data?.message || npwpVal.message}</div>
                     )}
                   </div>
                 )}
