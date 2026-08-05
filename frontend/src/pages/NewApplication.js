@@ -38,6 +38,7 @@ export default function NewApplication() {
   });
   const [docs, setDocs] = useState([]);
   const [nibCheck, setNibCheck] = useState(null);
+  const [npwpCheck, setNpwpCheck] = useState(null);
   const [bankCheck, setBankCheck] = useState(null);
   const [verifying, setVerifying] = useState(false);
 
@@ -85,6 +86,23 @@ export default function NewApplication() {
       const { data } = await api.post(`/applications/${id}/verify-bank`);
       setBankCheck(data.bank);
       toast[data.bank?.verified ? "success" : "error"](data.bank?.note || "Selesai");
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setVerifying(false); }
+  };
+
+  const verifyNpwp = async () => {
+    if (!c.npwp) { toast.error("Isi NPWP terlebih dahulu"); return; }
+    if (!c.legal_name) { toast.error("Isi nama legal perusahaan terlebih dahulu"); return; }
+    if (!(c.address || "").trim() || (c.address || "").trim().length < 7) {
+      toast.error("Isi alamat terdaftar (minimal 7 karakter)"); return;
+    }
+    setVerifying(true);
+    try {
+      const id = await ensureApp();
+      const { data } = await api.post(`/applications/${id}/verify-npwp`);
+      setNpwpCheck(data.npwp);
+      const msg = data.npwp?.data?.message || data.npwp?.message || "Selesai";
+      toast[data.npwp?.is_success ? "success" : "error"](msg);
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setVerifying(false); }
   };
@@ -208,6 +226,38 @@ export default function NewApplication() {
                       {nibCheck.qr?.success && <> · Domain oss.go.id: {nibCheck.qr.domain_valid ? "VALID" : "INVALID"} · NIB cocok: {nibCheck.qr.matches_input ? "YA" : "TIDAK"}</>}</div>
                     <div>Registry OSS: {nibCheck.registry?.source} · {nibCheck.registry?.status || "-"}</div>
                     {nibCheck.reason && <div className="text-red-600">{nibCheck.reason}</div>}
+                  </div>
+                )}
+              </div>
+              <div className="sm:col-span-2 border border-dashed border-gray-300 rounded-sm p-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="text-sm font-medium flex items-center gap-2"><BadgeCheck className="w-4 h-4 text-blue-600" /> Verifikasi NPWP</div>
+                    <div className="text-xs text-gray-500">Cocokkan NPWP, nama legal, dan alamat terhadap data provider (api.co.id)</div>
+                  </div>
+                  <Button data-testid="verify-npwp-button" type="button" variant="outline" onClick={verifyNpwp} disabled={verifying} className="rounded-sm gap-2">
+                    <BadgeCheck className="w-4 h-4" /> {verifying ? "Memverifikasi…" : "Verifikasi NPWP"}
+                  </Button>
+                </div>
+                {npwpCheck && (
+                  <div
+                    data-testid="npwp-check-result"
+                    className={`mt-3 text-sm border rounded-sm p-3 ${npwpCheck.is_success ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}
+                  >
+                    <div>Message: <b>{npwpCheck.data?.message || npwpCheck.message || "—"}</b></div>
+                    {npwpCheck.data?.transaction_id && (
+                      <div className="text-xs mt-1 font-mono">Trx: {npwpCheck.data.transaction_id}</div>
+                    )}
+                    {npwpCheck.data?.data && (
+                      <div className="mt-2 space-y-0.5 font-mono text-xs">
+                        <div>Nama: {npwpCheck.data.data.name || "—"}</div>
+                        <div>Alamat: {npwpCheck.data.data.address || "—"}</div>
+                        <div>Status WP: {npwpCheck.data.data.status_wp || "—"} · Status SPT: {npwpCheck.data.data.status_spt || "—"}</div>
+                      </div>
+                    )}
+                    {!npwpCheck.data?.data && npwpCheck.message && !npwpCheck.data?.message && (
+                      <div className="text-xs mt-1">{npwpCheck.message}</div>
+                    )}
                   </div>
                 )}
               </div>
