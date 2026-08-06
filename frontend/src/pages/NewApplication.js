@@ -24,11 +24,19 @@ const STEPS = [
 ];
 
 const filled = (v) => String(v ?? "").trim().length > 0;
+const ADDRESS_MIN = 7;
+const ADDRESS_MAX = 100;
+
+const addressLen = (address) => (address || "").trim().length;
+const addressValid = (address) => {
+  const len = addressLen(address);
+  return len >= ADDRESS_MIN && len <= ADDRESS_MAX;
+};
 
 /** Mandatory fields per step — Lanjut stays disabled until these are complete. */
 function stepComplete(step, c) {
   if (step === 1) {
-    return filled(c.legal_name) && filled(c.npwp) && filled(c.address) && (c.address || "").trim().length >= 7;
+    return filled(c.legal_name) && filled(c.npwp) && addressValid(c.address);
   }
   if (step === 2) {
     return c.directors.length > 0 && c.directors.every((d) => filled(d.name));
@@ -45,6 +53,7 @@ export default function NewApplication() {
   const [step, setStep] = useState(1);
   const [appId, setAppId] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [banks, setBanks] = useState([]);
   const [banksLoading, setBanksLoading] = useState(true);
   const [c, setC] = useState({
@@ -82,6 +91,10 @@ export default function NewApplication() {
   }, []);
 
   const upd = (k) => (e) => setC({ ...c, [k]: e.target?.value ?? e });
+  const updAddress = (e) => {
+    const value = (e.target?.value ?? "").slice(0, ADDRESS_MAX);
+    setC({ ...c, address: value });
+  };
   const updDir = (i, k, v) => { const d = [...c.directors]; d[i][k] = v; setC({ ...c, directors: d }); };
   const addDir = () => setC({ ...c, directors: [...c.directors, { name: "", role: "Direktur", id_number: "", is_pep: false, ownership_pct: "" }] });
   const rmDir = (i) => setC({ ...c, directors: c.directors.filter((_, j) => j !== i) });
@@ -142,7 +155,12 @@ export default function NewApplication() {
   };
 
   const submit = async () => {
+    if (!addressValid(c.address)) {
+      toast.error(`Alamat terdaftar harus ${ADDRESS_MIN}–${ADDRESS_MAX} karakter`);
+      return;
+    }
     setBusy(true);
+    setSubmitting(true);
     try {
       const id = await ensureApp();
       toast.loading("Memverifikasi NPWP, rekening & NIB (OSS). Menunggu hasil OSS sebelum selesai…", { id: "sub" });
@@ -155,11 +173,21 @@ export default function NewApplication() {
       navigate(`/applications/${id}`);
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail), { id: "sub" });
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+      setSubmitting(false);
+    }
   };
 
   return (
     <div className="animate-fade-up">
+      {submitting && (
+        <div
+          data-testid="submit-backdrop"
+          className="fixed inset-0 z-[100] bg-black/40"
+          aria-hidden="true"
+        />
+      )}
       <header className="bg-white border-b border-gray-200 px-8 py-5">
         <h1 className="font-head font-extrabold text-2xl tracking-tight">Onboarding Nasabah Perusahaan</h1>
         <p className="text-sm text-gray-500">Verifikasi KYB berstandar perbankan dengan credit scoring</p>
@@ -209,7 +237,23 @@ export default function NewApplication() {
               <Field label="Tahun Berdiri"><Input type="number" value={c.established_year} onChange={upd("established_year")} className="rounded-sm font-mono" placeholder="2019" /></Field>
               <Field label="Website"><Input value={c.website} onChange={upd("website")} className="rounded-sm" /></Field>
               <Field label="Negara"><Input value={c.country} onChange={upd("country")} className="rounded-sm" /></Field>
-              <div className="sm:col-span-2"><Field label="Alamat Terdaftar *" hint="Minimal 7 karakter (diperlukan untuk verifikasi NPWP saat pengiriman)"><Textarea value={c.address} onChange={upd("address")} className="rounded-sm" rows={2} /></Field></div>
+              <div className="sm:col-span-2">
+                <Field
+                  label="Alamat Terdaftar *"
+                  hint={`${addressLen(c.address)}/${ADDRESS_MAX} karakter · minimal ${ADDRESS_MIN}, maksimal ${ADDRESS_MAX}`}
+                >
+                  <Textarea
+                    data-testid="address-input"
+                    value={c.address}
+                    onChange={updAddress}
+                    className="rounded-sm"
+                    rows={2}
+                    minLength={ADDRESS_MIN}
+                    maxLength={ADDRESS_MAX}
+                    placeholder="Alamat kantor terdaftar perusahaan"
+                  />
+                </Field>
+              </div>
             </div>
           )}
 
@@ -332,7 +376,7 @@ export default function NewApplication() {
             {step < 4 ? (
               <Button data-testid="next-step-button" onClick={next} disabled={busy || !stepComplete(step, c)} className="rounded-sm bg-black hover:bg-gray-800 gap-2">Lanjut <ArrowRight className="w-4 h-4" /></Button>
             ) : (
-              <Button data-testid="submit-application-button" onClick={submit} disabled={busy} className="rounded-sm bg-blue-600 hover:bg-blue-700 gap-2"><Send className="w-4 h-4" /> Kirim & Nilai Risiko</Button>
+              <Button data-testid="submit-application-button" onClick={submit} disabled={busy || submitting} className="rounded-sm bg-blue-600 hover:bg-blue-700 gap-2"><Send className="w-4 h-4" /> Kirim & Nilai Risiko</Button>
             )}
           </div>
         </div>
