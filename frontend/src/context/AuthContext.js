@@ -4,10 +4,10 @@ import { api, clearAuthToken, setAuthToken } from "@/lib/api";
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
 
-/** True while the URL still carries an OAuth session_id that has to be exchanged. */
-export function hasPendingOAuthSession(location) {
-  const hash = location?.hash ?? (typeof window === "undefined" ? "" : window.location.hash);
-  return (hash || "").includes("session_id=");
+/** True while the SPA is finishing a Google OAuth return on /auth/callback. */
+export function isOAuthCallbackRoute(location) {
+  const path = location?.pathname ?? (typeof window !== "undefined" ? window.location.pathname : "");
+  return path === "/auth/callback";
 }
 
 export function AuthProvider({ children }) {
@@ -38,9 +38,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    // AuthCallback owns the exchange; probing /auth/me here would race with it.
-    if (hasPendingOAuthSession()) return;
+    if (typeof window !== "undefined" && window.location.pathname === "/auth/callback") return;
     checkAuth();
   }, [checkAuth]);
 
