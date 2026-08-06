@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send, BadgeCheck, Check, ChevronsUpDown } from "lucide-react";
+import { ArrowRight, ArrowLeft, Plus, Trash2, UploadCloud, Sparkles, Building2, Users, FileText, Send, Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APPLICATIONS_QUERY_KEY, DASHBOARD_STATS_QUERY_KEY } from "@/lib/queryKeys";
 
@@ -55,8 +55,6 @@ export default function NewApplication() {
     directors: [{ name: "", role: "Direktur Utama", id_number: "", is_pep: false, ownership_pct: "" }],
   });
   const [docs, setDocs] = useState([]);
-  const [nibCheck, setNibCheck] = useState(null);
-  const [verifying, setVerifying] = useState(false);
   const [bankOpen, setBankOpen] = useState(false);
 
   useEffect(() => {
@@ -104,21 +102,6 @@ export default function NewApplication() {
     return data.id;
   };
 
-  const verifyNib = async (file) => {
-    if (!file) return;
-    setVerifying(true);
-    try {
-      const id = await ensureApp();
-      const fd = new FormData();
-      fd.append("file", file);
-      const { data } = await api.post(`/applications/${id}/verify-nib`, fd);
-      setNibCheck(data.nib);
-      if (data.nib?.qr?.success) toast.success(data.nib.qr.matches_input ? "QR NIB terverifikasi" : "QR terdeteksi, namun NIB tidak cocok");
-      else toast.error(data.nib?.qr?.reason || "QR tidak terdeteksi");
-    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
-    finally { setVerifying(false); }
-  };
-
   const next = async () => {
     if (!stepComplete(step, c)) {
       toast.error("Lengkapi field wajib sebelum melanjutkan");
@@ -162,13 +145,13 @@ export default function NewApplication() {
     setBusy(true);
     try {
       const id = await ensureApp();
-      toast.loading("Memverifikasi NPWP & rekening, lalu menjalankan screening & credit scoring…", { id: "sub" });
+      toast.loading("Memverifikasi NPWP, rekening & NIB (OSS). Menunggu hasil OSS sebelum selesai…", { id: "sub" });
       await api.post(`/applications/${id}/submit`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: APPLICATIONS_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: DASHBOARD_STATS_QUERY_KEY }),
       ]);
-      toast.success("Aplikasi dikirim. Hasil verifikasi siap ditinjau.", { id: "sub" });
+      toast.success("Aplikasi dikirim. Hasil verifikasi (termasuk NIB OSS) siap ditinjau.", { id: "sub" });
       navigate(`/applications/${id}`);
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail), { id: "sub" });
@@ -227,26 +210,6 @@ export default function NewApplication() {
               <Field label="Website"><Input value={c.website} onChange={upd("website")} className="rounded-sm" /></Field>
               <Field label="Negara"><Input value={c.country} onChange={upd("country")} className="rounded-sm" /></Field>
               <div className="sm:col-span-2"><Field label="Alamat Terdaftar *" hint="Minimal 7 karakter (diperlukan untuk verifikasi NPWP saat pengiriman)"><Textarea value={c.address} onChange={upd("address")} className="rounded-sm" rows={2} /></Field></div>
-              <div className="sm:col-span-2 border border-dashed border-gray-300 rounded-sm p-4">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div>
-                    <div className="text-sm font-medium flex items-center gap-2"><BadgeCheck className="w-4 h-4 text-blue-600" /> Verifikasi NIB via QR Code</div>
-                    <div className="text-xs text-gray-500">Unggah dokumen NIB (gambar) — sistem decode QR & cek keaslian domain resmi oss.go.id</div>
-                  </div>
-                  <label data-testid="verify-nib-upload" className="cursor-pointer text-sm px-3 py-2 border border-gray-300 rounded-sm hover:border-blue-500 transition-colors duration-200 flex items-center gap-2">
-                    <UploadCloud className="w-4 h-4" /> {verifying ? "Memproses…" : "Unggah & Verifikasi"}
-                    <input type="file" accept="image/*" className="hidden" onChange={(e) => verifyNib(e.target.files[0])} />
-                  </label>
-                </div>
-                {nibCheck && (
-                  <div data-testid="nib-check-result" className="mt-3 text-sm border-t border-gray-200 pt-3 space-y-1 font-mono text-xs">
-                    <div>QR: {nibCheck.qr?.success ? <span className="text-emerald-600">TERDETEKSI</span> : <span className="text-red-600">TIDAK ADA</span>}
-                      {nibCheck.qr?.success && <> · Domain oss.go.id: {nibCheck.qr.domain_valid ? "VALID" : "INVALID"} · NIB cocok: {nibCheck.qr.matches_input ? "YA" : "TIDAK"}</>}</div>
-                    <div>Registry OSS: {nibCheck.registry?.source} · {nibCheck.registry?.status || "-"}</div>
-                    {nibCheck.reason && <div className="text-red-600">{nibCheck.reason}</div>}
-                  </div>
-                )}
-              </div>
             </div>
           )}
 
@@ -340,7 +303,7 @@ export default function NewApplication() {
           {step === 4 && (
             <div className="space-y-4">
               <div className="flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-sm p-3">
-                <Sparkles className="w-4 h-4" /> Unggah gambar dokumen (JPG/PNG) — AI akan mengekstrak data secara otomatis. Saat kirim, sistem memverifikasi NPWP & rekening bank lalu menilai risiko.
+                <Sparkles className="w-4 h-4" /> Unggah gambar dokumen (JPG/PNG) — AI akan mengekstrak data secara otomatis. Saat kirim, sistem memverifikasi NPWP, rekening bank & NIB via OSS, lalu menilai risiko.
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {["Akta Pendirian","NIB","NPWP","KTP Direktur","Laporan Keuangan","Lainnya"].map((dt) => (
