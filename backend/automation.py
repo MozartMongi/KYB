@@ -23,81 +23,105 @@ def browserbase_configured() -> bool:
     return bool(os.environ.get("BROWSERBASE_API_KEY") and os.environ.get("BROWSERBASE_PROJECT_ID"))
 
 
+# OSS announcement overlay DOM (oss.go.id/id):
+# div.fixed.z-[9999]                    → full-screen backdrop
+#   div.relative.overflow-hidden.shadow-2xl  → each carousel slide
+#     span.material-icons...cursor-pointer   → close (text: "close")
+#     img[alt="popup"]                       → announcement image
+OSS_OVERLAY_SELECTOR = 'div.fixed.left-0.top-0[class*="z-[9999]"]'
+OSS_CLOSE_SELECTOR = (
+    'div.fixed[class*="z-[9999]"] '
+    'div.relative.overflow-hidden.shadow-2xl '
+    'span.material-icons.cursor-pointer:text-is("close")'
+)
+OSS_CLOSE_FALLBACK = 'span.material-icons.absolute.right-0.top-0.cursor-pointer:text-is("close")'
+
+
+def _overlay_blocks_page(page) -> bool:
+    """True when the oss.go.id PEMBERITAHUAN overlay still intercepts clicks."""
+    try:
+        return bool(page.evaluate(
+            """() => {
+              return Array.from(document.querySelectorAll('div.fixed')).some((el) => {
+                const cls = el.className || '';
+                if (!cls.includes('z-[9999]')) return false;
+                const s = getComputedStyle(el);
+                return s.display !== 'none' && s.visibility !== 'hidden' && s.pointerEvents !== 'none';
+              });
+            }"""
+        ))
+    except Exception:
+        return False
+
+
+def _remove_announcement_overlay(page) -> None:
+    """Force-remove the fixed announcement overlay from DOM."""
+    page.evaluate(
+        """() => {
+          document.querySelectorAll('div.fixed').forEach((el) => {
+            const cls = el.className || '';
+            if (cls.includes('z-[9999]')) el.remove();
+          });
+        }"""
+    )
+
+
+def _click_oss_close_button(page) -> bool:
+    """Click the Material Icons close span inside the announcement carousel slide."""
+    for sel in (OSS_CLOSE_SELECTOR, OSS_CLOSE_FALLBACK, 'span.material-icons:has-text("close")'):
+        try:
+            loc = page.locator(sel).first
+            if loc.is_visible(timeout=1500):
+                loc.click(timeout=3000, force=True)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _dismiss_announcements(page) -> None:
     """
-    Close the PEMBERITAHUAN carousel that always appears on oss.go.id/id.
-    Close control is a Material Icons span with text "close" (top-right of popup).
+    Close the PEMBERITAHUAN carousel on oss.go.id/id.
+    Each slide: div.relative.overflow-hidden.shadow-2xl > span.material-icons (close).
     """
-    # Wait briefly for the fixed overlay to mount
+    page.wait_for_timeout(1500)
+
     try:
-        page.wait_for_selector(
-            'div.fixed.left-0.top-0 span.material-icons',
-            timeout=8000,
-            state="visible",
-        )
+        page.wait_for_selector(OSS_OVERLAY_SELECTOR, timeout=10000, state="visible")
     except Exception:
-        pass
+        return
 
-    def _overlay_visible() -> bool:
-        try:
-            return bool(page.evaluate(
-                """() => {
-                  return Array.from(document.querySelectorAll('div.fixed')).some((el) => {
-                    const cls = el.className || '';
-                    if (!cls.includes('z-[9999]')) return false;
-                    const s = getComputedStyle(el);
-                    return s.display !== 'none' && s.visibility !== 'hidden' && el.offsetParent !== null;
-                  });
-                }"""
-            ))
-        except Exception:
-            return False
+    if not _overlay_blocks_page(page):
+        return
 
-    # Click visible close icon on the announcement carousel
-    for _ in range(3):
-        if not _overlay_visible():
+    # Carousel may have multiple slides — click close until overlay disappears
+    for _ in range(8):
+        if not _overlay_blocks_page(page):
             break
-        try:
-            close_icon = page.locator('span.material-icons.cursor-pointer:text-is("close")').first
-            if not close_icon.is_visible(timeout=1500):
-                close_icon = page.locator('span.material-icons:has-text("close")').first
-            if close_icon.is_visible(timeout=800):
-                close_icon.click(timeout=3000, force=True)
-                page.wait_for_timeout(500)
-        except Exception:
+        if not _click_oss_close_button(page):
             break
+        page.wait_for_timeout(600)
 
-    # Fallback selectors
-    if _overlay_visible():
-        for sel in (
-            'span.material-icons.absolute.right-0.top-0',
-            'button:has-text("Tutup")',
-            'button[aria-label="Close"]',
-            'button[aria-label="close"]',
-        ):
+    # Fallback: other close patterns
+    if _overlay_blocks_page(page):
+        for sel in ('button:has-text("Tutup")', 'button[aria-label="Close"]', 'button[aria-label="close"]'):
             try:
                 loc = page.locator(sel).first
                 if loc.is_visible(timeout=800):
                     loc.click(timeout=2000, force=True)
                     page.wait_for_timeout(400)
-                    if not _overlay_visible():
+                    if not _overlay_blocks_page(page):
                         break
             except Exception:
                 continue
 
-    # Last resort: remove overlay so Cari NIB is interactable
-    if _overlay_visible():
-        try:
-            page.evaluate(
-                """() => {
-                  document.querySelectorAll('div.fixed').forEach((el) => {
-                    const cls = el.className || '';
-                    if (cls.includes('z-[9999]')) el.remove();
-                  });
-                }"""
-            )
-        except Exception:
-            pass
+    # Last resort: remove entire z-[9999] overlay from DOM
+    if _overlay_blocks_page(page):
+        _remove_announcement_overlay(page)
+        page.wait_for_timeout(300)
+
+    if _overlay_blocks_page(page):
+        logger.warning("OSS announcement overlay may still block interactions after dismiss")
 
 
 def _extract_modal_fields(page) -> dict:
@@ -159,16 +183,20 @@ def run_oss_nib_lookup(nib: str) -> dict:
 
             search = page.locator('input[placeholder="Cari NIB"]')
             search.wait_for(state="visible", timeout=20000)
-            # Scroll footer search into view (Pencarian NIB sits at bottom)
             search.scroll_into_view_if_needed()
             page.wait_for_timeout(300)
-            search.click()
-            search.fill(nib)
 
-            # Prefer the dedicated search button; fall back to Enter
+            # Re-check overlay — it can still intercept clicks even when input is "visible"
+            if _overlay_blocks_page(page):
+                _remove_announcement_overlay(page)
+                page.wait_for_timeout(300)
+
+            # force=True bypasses pointer-event interception from leftover overlays
+            search.fill(nib, force=True)
+
             btn = page.get_by_role("button", name="Cari NIB")
             if btn.count() and btn.first.is_visible():
-                btn.first.click()
+                btn.first.click(force=True)
             else:
                 search.press("Enter")
 
