@@ -1,6 +1,6 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { AuthProvider, hasPendingOAuthSession, useAuth } from "@/context/AuthContext";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { Toaster } from "sonner";
 import AuthCallback from "@/pages/AuthCallback";
 import Login from "@/pages/Login";
@@ -34,10 +34,9 @@ function GuestOnly({ children }) {
 }
 
 function AppRouter() {
-  const location = useLocation();
-  if (hasPendingOAuthSession(location)) return <AuthCallback />;
   return (
     <Routes>
+      <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
       <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
       <Route path="/applications/new" element={<Protected><NewApplication /></Protected>} />
