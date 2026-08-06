@@ -35,6 +35,14 @@ export default function ApplicationDetail() {
   }, [id]);
   useEffect(() => { load(); }, [load]);
 
+  // Poll while OSS Browserbase lookup is still queued/processing
+  useEffect(() => {
+    const status = a?.validation?.nib?.registry?.lookup_status;
+    if (!["queued", "processing"].includes(status)) return undefined;
+    const t = setInterval(() => { load(); }, 2500);
+    return () => clearInterval(t);
+  }, [a?.validation?.nib?.registry?.lookup_status, load]);
+
   const createDidit = async () => {
     setBusy(true);
     try {
@@ -188,20 +196,62 @@ export default function ApplicationDetail() {
               <h2 className="font-head font-bold flex items-center gap-2 mb-4"><BadgeCheck className="w-4 h-4 text-blue-600" /> Validasi Sistem</h2>
               <div className="grid sm:grid-cols-2 gap-4">
                 <div className="border border-gray-200 rounded-sm p-4" data-testid="nib-validation">
-                  <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi NIB</div>
-                  <div className="flex items-center gap-2">
-                    {val.nib?.valid ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Ban className="w-4 h-4 text-red-600" />}
-                    <span className={`font-mono text-sm font-semibold ${val.nib?.valid ? "text-emerald-700" : "text-red-700"}`}>
-                      {val.nib?.valid ? "VALID" : "TIDAK VALID"}
+                  <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi NIB (OSS)</div>
+                  <div className="flex items-center gap-2 mb-3">
+                    {["queued", "processing"].includes(val.nib?.registry?.lookup_status) ? (
+                      <RefreshCw className="w-4 h-4 text-blue-600 animate-spin" />
+                    ) : val.nib?.valid ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <Ban className="w-4 h-4 text-red-600" />
+                    )}
+                    <span className={`font-mono text-sm font-semibold ${
+                      ["queued", "processing"].includes(val.nib?.registry?.lookup_status)
+                        ? "text-blue-700"
+                        : val.nib?.valid ? "text-emerald-700" : "text-red-700"
+                    }`}>
+                      {["queued", "processing"].includes(val.nib?.registry?.lookup_status)
+                        ? "MENCARI DI OSS…"
+                        : val.nib?.valid ? "VALID" : "TIDAK VALID"}
                     </span>
                   </div>
-                  {val.nib?.qr && val.nib.qr.success && (
-                    <div className="text-xs text-gray-500 mt-1">QR: <span className="font-mono">{val.nib.qr.domain_valid ? "oss.go.id ✓" : "domain tidak valid"}</span> · NIB {val.nib.qr.matches_input ? "cocok" : "tidak cocok"}</div>
-                  )}
                   {val.nib?.registry && (
-                    <div className="text-xs text-gray-500">Registry: <span className="font-mono">{val.nib.registry.source} · {val.nib.registry.status || "-"}</span></div>
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">NIB</span>
+                        <span className="font-mono text-right text-gray-900">{val.nib.registry.nib || co.nib || "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Nama Perusahaan</span>
+                        <span className="font-mono text-right text-gray-900">{val.nib.registry.nama_perusahaan || "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Status Aktif</span>
+                        <span className="font-mono text-right text-gray-900">{val.nib.registry.status_aktif || val.nib.registry.status || "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Status Migrasi</span>
+                        <span className="font-mono text-right text-gray-900">{val.nib.registry.status_migrasi || "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Penanaman Modal</span>
+                        <span className="font-mono text-right text-gray-900">{val.nib.registry.penanaman_modal || "—"}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-500 shrink-0">Skala Usaha</span>
+                        <span className="font-mono text-right text-gray-900">{val.nib.registry.skala_usaha || "—"}</span>
+                      </div>
+                    </div>
                   )}
-                  {val.nib?.reason && <div className="text-xs text-red-600 mt-1">{val.nib.reason}</div>}
+                  {val.nib?.registry?.error && (
+                    <div className="text-xs text-red-600 mt-3 pt-2 border-t border-gray-100">{val.nib.registry.error}</div>
+                  )}
+                  {val.nib?.reason && <div className="text-xs text-red-600 mt-2">{val.nib.reason}</div>}
+                  {val.nib?.qr && val.nib.qr.success && (
+                    <div className="text-xs text-gray-400 mt-3 pt-2 border-t border-gray-100 font-mono">
+                      QR: {val.nib.qr.domain_valid ? "oss.go.id ✓" : "domain tidak valid"} · NIB {val.nib.qr.matches_input ? "cocok" : "tidak cocok"}
+                    </div>
+                  )}
                 </div>
                 <div className="border border-gray-200 rounded-sm p-4" data-testid="bank-validation">
                   <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi Rekening Bank</div>
