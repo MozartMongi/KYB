@@ -1,61 +1,50 @@
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
+import { setAuthToken } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
-/**
- * A session_id is single-use: exchanging it twice fails. Dedupe at module scope so
- * StrictMode's double effect (or a remount mid-exchange) reuses the first promise
- * instead of burning the id and bouncing the user back to /login.
- */
-const exchanges = new Map();
-
-function exchangeSession(sessionId) {
-  if (!exchanges.has(sessionId)) {
-    exchanges.set(
-      sessionId,
-      api.post("/auth/session", { session_id: sessionId }).then((r) => r.data),
-    );
-  }
-  return exchanges.get(sessionId);
-}
-
 export default function AuthCallback() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { applySession, checkAuth } = useAuth();
+  const { checkAuth } = useAuth();
   const started = useRef(false);
 
   useEffect(() => {
     if (started.current) return;
     started.current = true;
 
-    const hash = location.hash || window.location.hash;
-    const sid = new URLSearchParams(hash.replace("#", "")).get("session_id");
+    const hash = (location.hash || window.location.hash || "").replace(/^#/, "");
+    const params = new URLSearchParams(hash);
+    const token = params.get("token");
+    const error = params.get("error");
 
     (async () => {
-      if (sid) {
-        try {
-          applySession(await exchangeSession(sid));
-          navigate("/dashboard", { replace: true });
-          return;
-        } catch (e) {
-          exchanges.delete(sid);
-          console.error("Google session exchange failed", e);
-        }
+      if (error) {
+        toast.error(decodeURIComponent(error.replace(/\+/g, " ")));
+        navigate("/login", { replace: true });
+        return;
       }
-      // The exchange may have failed because it already succeeded (single-use id):
-      // trust the cookie/token before sending the user back to the login screen.
+      if (token) {
+        setAuthToken(token);
+        window.history.replaceState(null, "", "/auth/callback");
+        if (await checkAuth()) {
+          navigate("/dashboard", { replace: true });
+        } else {
+          toast.error("Sesi Google tidak dapat diverifikasi. Silakan masuk kembali.");
+          navigate("/login", { replace: true });
+        }
+        return;
+      }
       if (await checkAuth()) {
         navigate("/dashboard", { replace: true });
       } else {
-        toast.error("Sesi Google tidak dapat diverifikasi. Silakan masuk kembali.");
+        toast.error("Login Google tidak lengkap. Silakan coba lagi.");
         navigate("/login", { replace: true });
       }
     })();
-  }, [location, navigate, applySession, checkAuth]);
+  }, [location, navigate, checkAuth]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0A0A0A] text-white">
