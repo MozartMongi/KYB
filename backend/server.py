@@ -8,6 +8,7 @@ import uuid
 import json
 import base64
 import time
+import asyncio
 import logging
 import bcrypt
 import jwt
@@ -274,8 +275,22 @@ def _clean_nib(nib: str) -> str:
 def validate_nib_format(nib: str) -> bool:
     return len(_clean_nib(nib)) == 13
 
-def nib_registry_lookup(nib: str) -> dict:
-    # Pluggable OSS/BKPM registry layer. Real provider active when NIB_REGISTRY_API_URL is configured.
+def _browserbase_ready() -> bool:
+    return bool(os.environ.get("BROWSERBASE_API_KEY") and os.environ.get("BROWSERBASE_PROJECT_ID"))
+
+
+def _redis_ready() -> bool:
+    return bool(os.environ.get("REDIS_URL"))
+
+
+def nib_registry_lookup(nib: str, *, use_browserbase: bool = False) -> dict:
+    """
+    Resolve NIB against OSS registry.
+    Priority: NIB_REGISTRY_API_URL → Browserbase (oss.go.id, when use_browserbase) → SIMULASI.
+    Browserbase path always runs synchronously so submit only finishes after
+    registry data (success or failed) is ready to persist.
+    """
+    cleaned = _clean_nib(nib)
     url = os.environ.get("NIB_REGISTRY_API_URL")
     if url:
         try:
@@ -283,14 +298,54 @@ def nib_registry_lookup(nib: str) -> dict:
             key = os.environ.get("NIB_REGISTRY_API_KEY")
             if key:
                 headers["Authorization"] = f"Bearer {key}"
-            r = requests.get(url, params={"nib": _clean_nib(nib)}, headers=headers, timeout=20)
+            r = requests.get(url, params={"nib": cleaned}, headers=headers, timeout=20)
             r.raise_for_status()
-            return {"source": "registry", "found": True, **r.json()}
+            return {"source": "registry", "found": True, "lookup_status": "done", **r.json()}
         except Exception as e:
             logger.error(f"NIB registry lookup failed: {e}")
-            return {"source": "registry", "found": False, "error": str(e)}
-    # Simulation — siap dihubungkan ke provider OSS/BKPM nyata via NIB_REGISTRY_API_URL
-    return {"source": "SIMULASI", "found": True, "status": "AKTIF", "note": "Registry OSS belum terhubung — data simulasi"}
+            return {"source": "registry", "found": False, "lookup_status": "failed", "error": str(e)}
+
+    if use_browserbase and _browserbase_ready():
+        try:
+            from automation import run_oss_nib_lookup, registry_from_oss_result
+            return registry_from_oss_result(run_oss_nib_lookup(cleaned))
+        except Exception as e:
+            logger.error(f"Browserbase OSS NIB lookup failed: {e}")
+            return {
+                "source": "oss.go.id",
+                "found": False,
+                "status": "GAGAL",
+                "lookup_status": "failed",
+                "error": str(e),
+            }
+
+    # Simulation — aktif saat Browserbase tidak dipakai / belum dikonfigurasi (tests & local)
+    return {
+        "source": "SIMULASI",
+        "found": True,
+        "status": "AKTIF",
+        "lookup_status": "done",
+        "note": "Registry OSS belum terhubung — data simulasi",
+        "nama_perusahaan": "",
+        "status_aktif": "Aktif",
+        "status_migrasi": "",
+        "penanaman_modal": "",
+        "skala_usaha": "",
+        "nib": cleaned,
+    }
+
+
+def enqueue_oss_nib_lookup(app_id: str, nib: str) -> bool:
+    """Queue Celery job for OSS scrape (optional background use). Returns True if enqueued."""
+    if not (_browserbase_ready() and _redis_ready()):
+        return False
+    try:
+        from task import run_oss_nib_job
+        run_oss_nib_job.delay(app_id, _clean_nib(nib))
+        return True
+    except Exception as e:
+        logger.error(f"Failed to enqueue OSS NIB job: {e}")
+        return False
 
 def decode_nib_qr(image_bytes: bytes, expected_nib: str = "") -> dict:
     try:
@@ -316,7 +371,7 @@ def decode_nib_qr(image_bytes: bytes, expected_nib: str = "") -> dict:
         logger.error(f"QR decode failed: {e}")
         return {"success": False, "reason": f"Gagal decode QR: {e}"}
 
-def validate_nib(company: dict, qr: dict = None) -> dict:
+def validate_nib(company: dict, qr: dict = None, *, use_browserbase: bool = False) -> dict:
     raw = company.get("nib") or ""
     nib = _clean_nib(raw)
     fmt = validate_nib_format(raw)
@@ -331,7 +386,11 @@ def validate_nib(company: dict, qr: dict = None) -> dict:
     if not fmt:
         result["valid"] = False
         result["reason"] = "Format NIB tidak valid (harus 13 digit)"
-    result["registry"] = nib_registry_lookup(nib)
+    # Skip expensive OSS scrape when format already invalid
+    if result["valid"]:
+        result["registry"] = nib_registry_lookup(nib, use_browserbase=use_browserbase)
+    else:
+        result["registry"] = None
     if qr and qr.get("success") and not qr.get("matches_input", True):
         result["valid"] = False
         if not result["reason"]:
@@ -814,8 +873,15 @@ def generate_report_pdf(a: dict) -> bytes:
     if not npwp_inner:
         nested = npwp_data.get("data") if isinstance(npwp_data.get("data"), dict) else npwp_data
         npwp_inner = nested if isinstance(nested, dict) else {}
+    nib_reg = nib_v.get("registry") or {}
     vi = [["NIB valid", str(nib_v.get("valid", "-"))],
-          ["Registry OSS", f"{(nib_v.get('registry') or {}).get('source','-')} · {(nib_v.get('registry') or {}).get('status','-')}"],
+          ["NIB (OSS)", str(nib_reg.get("nib") or "-")],
+          ["Nama Perusahaan (OSS)", str(nib_reg.get("nama_perusahaan") or "-")],
+          ["Status Aktif", str(nib_reg.get("status_aktif") or nib_reg.get("status") or "-")],
+          ["Status Migrasi", str(nib_reg.get("status_migrasi") or "-")],
+          ["Penanaman Modal", str(nib_reg.get("penanaman_modal") or "-")],
+          ["Skala Usaha", str(nib_reg.get("skala_usaha") or "-")],
+          ["Registry sumber", f"{nib_reg.get('source','-')} · {nib_reg.get('lookup_status','-')}"],
           ["Bank", f"{bank_v.get('bank_name','-')} {bank_v.get('account_number_masked','')}"],
           ["Bank verified", f"{bank_v.get('verified','-')} ({bank_v.get('name_match_score',0)}%) · {bank_v.get('source','-')}"],
           ["NPWP success", str(npwp_v.get("is_success", "-"))],
@@ -1390,7 +1456,15 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
     if a.get("status") in ("auto_rejected", "approved", "rejected"):
         raise HTTPException(status_code=400, detail="Aplikasi sudah difinalisasi dan tidak dapat dikirim ulang")
     company = a["company"]
-    nib_val = validate_nib(company, a.get("nib_qr"))
+    # Browserbase OSS lookup runs to completion before submit returns, so
+    # ApplicationDetail always has registry done/failed (never still queued).
+    use_bb = _browserbase_ready()
+    if use_bb:
+        nib_val = await asyncio.to_thread(
+            validate_nib, company, a.get("nib_qr"), use_browserbase=True,
+        )
+    else:
+        nib_val = validate_nib(company, a.get("nib_qr"), use_browserbase=False)
     bank_val = verify_bank(company)
     npwp_val = verify_npwp(company)
     hits = screen_watchlist(company)
