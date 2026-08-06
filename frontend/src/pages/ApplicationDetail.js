@@ -107,8 +107,23 @@ export default function ApplicationDetail() {
   const ai = a.ai_review;
   const val = a.validation;
   const npwpVal = val?.npwp || a.npwp_check;
-  // api.co.id nests detail under data.data; fall back to data when already flattened
-  const npwpInner = npwpVal?.data?.data || (npwpVal?.data?.name || npwpVal?.data?.address ? npwpVal.data : null);
+  // Prefer backend-normalized detail; fall back to api.co.id nesting / EN+ID field names
+  const npwpRaw = npwpVal?.data?.data || npwpVal?.data || null;
+  const npwpInner = npwpVal?.detail || (npwpRaw && (npwpRaw.name || npwpRaw.nama || npwpRaw.address || npwpRaw.alamat || npwpRaw.status_wp)
+    ? {
+        name: npwpRaw.name || npwpRaw.nama || "",
+        address: npwpRaw.address || npwpRaw.alamat || "",
+        status_wp: npwpRaw.status_wp || npwpRaw.statusWp || "",
+        status_spt: npwpRaw.status_spt || npwpRaw.statusSpt || "",
+      }
+    : null);
+  const npwpMsg = String(npwpVal?.data?.message || npwpVal?.message || "").toLowerCase();
+  const npwpHasDetail = !!(npwpInner?.name || npwpInner?.status_wp);
+  // Explicit true, or legacy rows where provider detail/message succeeded but is_success was stored false
+  const npwpOk = npwpVal?.is_success === true
+    || npwpVal?.success === true
+    || (npwpHasDetail && /success|berhasil|successfully/.test(npwpMsg))
+    || (npwpHasDetail && npwpVal?.is_success == null && npwpVal?.success == null);
   const slaDue = a.sla_due_at ? new Date(a.sla_due_at) : null;
   const overdue = slaDue && new Date() > slaDue && a.status === "under_review";
 
@@ -214,9 +229,9 @@ export default function ApplicationDetail() {
                   <div className="border border-gray-200 rounded-sm p-4" data-testid="npwp-validation">
                     <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Verifikasi NPWP</div>
                     <div className="flex items-center gap-2 mb-3">
-                      {npwpVal.is_success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <ShieldAlert className="w-4 h-4 text-amber-600" />}
-                      <span className={`font-mono text-sm font-semibold ${npwpVal.is_success ? "text-emerald-700" : "text-amber-700"}`}>
-                        {npwpVal.is_success ? "SUCCESS" : "FAILED"}
+                      {npwpOk ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <ShieldAlert className="w-4 h-4 text-amber-600" />}
+                      <span className={`font-mono text-sm font-semibold ${npwpOk ? "text-emerald-700" : "text-amber-700"}`}>
+                        {npwpOk ? "SUCCESS" : "FAILED"}
                       </span>
                     </div>
                     <div className="space-y-1.5 text-sm">
