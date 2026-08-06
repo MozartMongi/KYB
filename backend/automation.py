@@ -124,16 +124,77 @@ def _dismiss_announcements(page) -> None:
         logger.warning("OSS announcement overlay may still block interactions after dismiss")
 
 
+def _submit_nib_search(page, nib: str) -> None:
+    """Fill NIB and trigger search on oss.go.id footer form."""
+    search = page.locator('input[placeholder="Cari NIB"]')
+    search.wait_for(state="visible", timeout=20000)
+    search.scroll_into_view_if_needed()
+    page.wait_for_timeout(300)
+
+    if _overlay_blocks_page(page):
+        _remove_announcement_overlay(page)
+        page.wait_for_timeout(300)
+
+    search.fill(nib, force=True)
+
+    btn = page.get_by_role("button", name="Cari NIB")
+    if btn.count() and btn.first.is_visible():
+        btn.first.click(force=True)
+    else:
+        search.press("Enter")
+
+
 def _extract_modal_fields(page) -> dict:
     """Parse key/value rows inside Detail Data Pelaku Usaha modal."""
-    page.wait_for_selector("text=Detail Data Pelaku Usaha", timeout=30000)
-    rows = page.locator("div.flex.justify-between.gap-4")
-    rows.first.wait_for(state="visible", timeout=15000)
+    page.wait_for_selector("text=Detail Data Pelaku Usaha", timeout=30000, state="visible")
+
+    # Generic div.flex.justify-between.gap-4 also exists in page nav (lg:hidden).
+    # Modal rows always contain span.font-bold (label) + span.truncate (value).
+    rows = page.locator(
+        'div.flex.justify-between.gap-4:has(span.font-bold):has(span.truncate)'
+    )
+    try:
+        rows.first.wait_for(state="visible", timeout=15000)
+    except Exception:
+        # Fallback: parse via JS scoped to modal title ancestor
+        raw = page.evaluate(
+            """() => {
+              const title = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,div,span'))
+                .find(el => (el.textContent || '').trim() === 'Detail Data Pelaku Usaha');
+              if (!title) return {};
+              let root = title.parentElement;
+              for (let i = 0; i < 8 && root; i++) {
+                const candidates = [...root.querySelectorAll('div.flex.justify-between.gap-4')]
+                  .filter(row => row.querySelector('span.font-bold') && row.querySelector('span.truncate'));
+                if (candidates.length >= 2) {
+                  const out = {};
+                  for (const row of candidates) {
+                    const label = (row.querySelector('span.font-bold')?.textContent || '').trim();
+                    const value = (row.querySelector('span.truncate')?.textContent || '').trim();
+                    if (label) out[label] = value;
+                  }
+                  return out;
+                }
+                root = root.parentElement;
+              }
+              return {};
+            }"""
+        )
+        if raw:
+            data = {}
+            for label, value in raw.items():
+                key = _LABEL_MAP.get(label, label)
+                data[key] = value
+            return data
+        raise
+
     data: dict = {}
     count = rows.count()
     for i in range(count):
         row = rows.nth(i)
         try:
+            if not row.is_visible():
+                continue
             label = (row.locator("span.font-bold").first.text_content() or "").strip()
             value = (row.locator("span.truncate").first.text_content() or "").strip()
         except Exception:
@@ -180,25 +241,8 @@ def run_oss_nib_lookup(nib: str) -> dict:
             page.goto(OSS_URL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(1200)
             _dismiss_announcements(page)
-
-            search = page.locator('input[placeholder="Cari NIB"]')
-            search.wait_for(state="visible", timeout=20000)
-            search.scroll_into_view_if_needed()
-            page.wait_for_timeout(300)
-
-            # Re-check overlay — it can still intercept clicks even when input is "visible"
-            if _overlay_blocks_page(page):
-                _remove_announcement_overlay(page)
-                page.wait_for_timeout(300)
-
-            # force=True bypasses pointer-event interception from leftover overlays
-            search.fill(nib, force=True)
-
-            btn = page.get_by_role("button", name="Cari NIB")
-            if btn.count() and btn.first.is_visible():
-                btn.first.click(force=True)
-            else:
-                search.press("Enter")
+            _submit_nib_search(page, nib)
+            page.wait_for_timeout(800)
 
             fields = _extract_modal_fields(page)
             if not fields.get("nib") and not fields.get("nama_perusahaan"):
