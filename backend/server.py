@@ -549,6 +549,53 @@ def verify_bank(company: dict) -> dict:
 def _clean_npwp(npwp: str) -> str:
     return "".join(ch for ch in (npwp or "") if ch.isdigit())
 
+def _as_api_bool(value) -> bool:
+    """Parse provider success flags that may be bool, int, or string."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "ok", "success")
+    return False
+
+def _npwp_inner_detail(data) -> Optional[dict]:
+    """Normalize api.co.id NPWP payload (data.data or flat; EN/ID field names)."""
+    if not isinstance(data, dict):
+        return None
+    inner = data.get("data") if isinstance(data.get("data"), dict) else data
+    if not isinstance(inner, dict):
+        return None
+    name = (inner.get("name") or inner.get("nama") or "").strip()
+    address = (inner.get("address") or inner.get("alamat") or "").strip()
+    status_wp = (inner.get("status_wp") or inner.get("statusWp") or "").strip()
+    status_spt = (inner.get("status_spt") or inner.get("statusSpt") or "").strip()
+    if not (name or address or status_wp or status_spt):
+        return None
+    return {
+        "name": name,
+        "address": address,
+        "status_wp": status_wp,
+        "status_spt": status_spt,
+    }
+
+def _npwp_response_success(body: dict, status_code: int, detail: Optional[dict]) -> bool:
+    """Resolve is_success from envelope, nested flags, or verified detail on HTTP 2xx."""
+    if status_code >= 400:
+        return False
+    for key in ("is_success", "success"):
+        if key in body:
+            return _as_api_bool(body.get(key))
+    data = body.get("data")
+    if isinstance(data, dict):
+        for key in ("is_success", "success"):
+            if key in data:
+                return _as_api_bool(data.get(key))
+    # HTTP OK with provider detail ⇒ treat as successful verification lookup
+    if 200 <= status_code < 300 and detail:
+        return True
+    return False
+
 def verify_npwp(company: dict) -> dict:
     """Verify NPWP via api.co.id POST /npwp/verify. Do not log PII."""
     url = _api_co_id_url("/npwp/verify")
@@ -562,7 +609,9 @@ def verify_npwp(company: dict) -> dict:
         "is_success": False,
         "message": "",
         "data": None,
+        "detail": None,
         "npwp_digits": len(npwp),
+        "http_status": None,
     }
 
     if not npwp:
@@ -574,8 +623,14 @@ def verify_npwp(company: dict) -> dict:
     if len(name) < 2:
         result["message"] = "Nama legal perusahaan wajib diisi untuk verifikasi NPWP"
         return result
+    if len(name) > 100:
+        result["message"] = "Nama legal perusahaan maksimal 100 karakter untuk verifikasi NPWP"
+        return result
     if len(address) < 7:
         result["message"] = "Alamat terdaftar minimal 7 karakter untuk verifikasi NPWP"
+        return result
+    if len(address) > 255:
+        result["message"] = "Alamat terdaftar maksimal 255 karakter untuk verifikasi NPWP"
         return result
     if not result["configured"]:
         result["message"] = "api.co.id belum dikonfigurasi (BASE_URL_API_CO_ID / API_CO_ID_KEY)"
@@ -588,34 +643,42 @@ def verify_npwp(company: dict) -> dict:
             headers=_api_co_id_headers(),
             timeout=30,
         )
+        result["http_status"] = r.status_code
         try:
             body = r.json()
         except Exception:
             body = {}
 
         if isinstance(body, dict):
-            result["is_success"] = bool(body.get("is_success"))
-            result["message"] = body.get("message") or ""
             result["data"] = body.get("data")
+            result["detail"] = _npwp_inner_detail(result["data"])
+            result["message"] = (body.get("message") or "").strip()
             if not result["message"] and isinstance(result["data"], dict):
-                result["message"] = result["data"].get("message") or ""
+                result["message"] = (result["data"].get("message") or "").strip()
+            result["is_success"] = _npwp_response_success(body, r.status_code, result["detail"])
         else:
             result["message"] = "Respons provider tidak valid"
-
-        if r.status_code >= 400 and not result["message"]:
-            err_map = {
-                400: "JSON body tidak valid",
-                401: "API key hilang atau salah",
-                402: "Saldo/subscription belum cukup",
-                403: "eKYC belum approved",
-                404: "NPWP/NIK tidak ditemukan",
-                422: "Format npwp, name, atau address tidak valid",
-                502: "Provider auth/server error",
-                503: "Provider unavailable",
-                504: "Provider timeout",
-            }
-            result["message"] = err_map.get(r.status_code, f"Verifikasi gagal (HTTP {r.status_code})")
             result["is_success"] = False
+
+        if r.status_code >= 400:
+            result["is_success"] = False
+            if not result["message"]:
+                err_map = {
+                    400: "JSON body tidak valid",
+                    401: "API key hilang atau salah",
+                    402: "Saldo/subscription belum cukup",
+                    403: "eKYC belum approved",
+                    404: "NPWP/NIK tidak ditemukan",
+                    422: "Format npwp, name, atau address tidak valid",
+                    502: "Provider auth/server error",
+                    503: "Provider unavailable",
+                    504: "Provider timeout",
+                }
+                result["message"] = err_map.get(r.status_code, f"Verifikasi gagal (HTTP {r.status_code})")
+        logger.info(
+            "NPWP verify done http=%s success=%s has_detail=%s",
+            r.status_code, result["is_success"], bool(result["detail"]),
+        )
     except requests.Timeout:
         logger.error("NPWP verify timed out")
         result["message"] = "Timeout saat menghubungi provider NPWP"
@@ -747,7 +810,10 @@ def generate_report_pdf(a: dict) -> bytes:
     bank_v = val.get("bank") or {}
     npwp_v = val.get("npwp") or {}
     npwp_data = (npwp_v.get("data") or {}) if isinstance(npwp_v.get("data"), dict) else {}
-    npwp_inner = npwp_data.get("data") if isinstance(npwp_data.get("data"), dict) else {}
+    npwp_inner = npwp_v.get("detail") if isinstance(npwp_v.get("detail"), dict) else None
+    if not npwp_inner:
+        nested = npwp_data.get("data") if isinstance(npwp_data.get("data"), dict) else npwp_data
+        npwp_inner = nested if isinstance(nested, dict) else {}
     vi = [["NIB valid", str(nib_v.get("valid", "-"))],
           ["Registry OSS", f"{(nib_v.get('registry') or {}).get('source','-')} · {(nib_v.get('registry') or {}).get('status','-')}"],
           ["Bank", f"{bank_v.get('bank_name','-')} {bank_v.get('account_number_masked','')}"],
@@ -1306,7 +1372,11 @@ async def verify_npwp_endpoint(app_id: str, user: dict = Depends(get_current_use
     npwp_val = verify_npwp(a["company"])
     await db.applications.update_one(
         {"id": app_id},
-        {"$set": {"npwp_check": npwp_val, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {
+            "npwp_check": npwp_val,
+            "validation.npwp": npwp_val,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
     )
     return {"npwp": npwp_val}
 
