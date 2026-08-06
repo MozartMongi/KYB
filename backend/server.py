@@ -10,14 +10,17 @@ import base64
 import time
 import asyncio
 import logging
+import secrets
 import bcrypt
 import jwt
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
+from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form, Header, Query
 from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import RedirectResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 import certifi
@@ -54,6 +57,8 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
 APP_NAME = "corpscore-kyb"
@@ -147,6 +152,47 @@ def cookie_flags(request: Optional[Request]) -> dict:
 def set_auth_cookie(response: Response, name: str, value: str, request: Optional[Request] = None):
     response.set_cookie(key=name, value=value, httponly=True, max_age=604800, path="/", **cookie_flags(request))
 
+def _request_origin(request: Request) -> str:
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+    return f"{proto}://{host}".rstrip("/")
+
+def _google_oauth_callback_uri(request: Request) -> str:
+    return f"{_request_origin(request)}/api/auth/google/callback"
+
+def _safe_oauth_frontend_redirect(redirect: str, request: Request) -> str:
+    """Only allow redirects to known frontend origins (open-redirect guard)."""
+    fallback = f"{FRONTEND_URL.rstrip('/')}/auth/callback"
+    target = (redirect or fallback).strip()
+    try:
+        parsed = urlparse(target)
+        origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    except Exception:
+        return fallback
+    allowed = {o.rstrip("/") for o in get_cors_origins()}
+    allowed.add(FRONTEND_URL.rstrip("/"))
+    allowed.add(_request_origin(request))
+    if origin not in allowed:
+        return fallback
+    base = target.rstrip("/")
+    return base if base.endswith("/auth/callback") else f"{base}/auth/callback"
+
+async def _upsert_google_user(email: str, name: str, picture: str = "") -> dict:
+    email = email.strip().lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        role = "owner" if email == os.environ.get("ADMIN_EMAIL", "").lower() else "applicant"
+        user = {
+            "user_id": user_id, "email": email, "name": name or email, "role": role,
+            "picture": picture or "", "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.users.insert_one(dict(user))
+    elif picture and not user.get("picture"):
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"picture": picture}})
+        user["picture"] = picture
+    return user
+
 async def resolve_user(request: Request):
     # 1. JWT access_token cookie
     token = request.cookies.get("access_token")
@@ -206,9 +252,6 @@ class RegisterInput(BaseModel):
 class LoginInput(BaseModel):
     email: str
     password: str
-
-class SessionInput(BaseModel):
-    session_id: str
 
 class Director(BaseModel):
     name: str
@@ -1127,46 +1170,96 @@ async def login(inp: LoginInput, request: Request, response: Response):
     set_auth_cookie(response, "access_token", token, request)
     return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "token": token}
 
-@api_router.post("/auth/session")
-async def google_session(inp: SessionInput, request: Request, response: Response):
+@api_router.get("/auth/google")
+async def google_oauth_start(request: Request, redirect: str = Query("")):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="Google OAuth belum dikonfigurasi (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)")
+    state = secrets.token_urlsafe(32)
+    frontend_redirect = _safe_oauth_frontend_redirect(redirect, request)
+    await db.oauth_states.insert_one({
+        "state": state,
+        "redirect": frontend_redirect,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    params = urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": _google_oauth_callback_uri(request),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "online",
+        "prompt": "select_account",
+    })
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+
+@api_router.get("/auth/google/callback")
+async def google_oauth_callback(
+    request: Request,
+    code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    fallback = f"{FRONTEND_URL.rstrip('/')}/auth/callback"
+
+    def _fail(message: str, redirect_to: str = fallback):
+        return RedirectResponse(f"{redirect_to}#error={requests.utils.quote(message)}")
+
+    if error:
+        return _fail(f"Login Google dibatalkan: {error}")
+
+    if not code or not state:
+        return _fail("Kode OAuth Google tidak valid")
+
+    doc = await db.oauth_states.find_one_and_delete({"state": state})
+    if not doc:
+        return _fail("Sesi OAuth tidak valid atau sudah kedaluwarsa")
+    expires_at = doc.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        return _fail("Sesi OAuth kedaluwarsa")
+
+    frontend_redirect = doc.get("redirect") or fallback
+    callback_uri = _google_oauth_callback_uri(request)
+
     try:
-        # Below the frontend's 20s client timeout so a slow provider yields a real error.
-        r = requests.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": inp.session_id}, timeout=15)
+        token_resp = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": callback_uri,
+                "grant_type": "authorization_code",
+            },
+            timeout=15,
+        )
+        token_body = token_resp.json() if token_resp.content else {}
+        if token_resp.status_code != 200 or not token_body.get("access_token"):
+            logger.warning("Google token exchange failed: %s", token_body.get("error_description") or token_resp.text[:200])
+            return _fail("Gagal menukar kode Google", frontend_redirect)
+        google_access = token_body["access_token"]
+        profile_resp = requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {google_access}"},
+            timeout=15,
+        )
+        profile = profile_resp.json() if profile_resp.content else {}
+        if profile_resp.status_code != 200 or not profile.get("email"):
+            logger.warning("Google userinfo failed: %s", profile)
+            return _fail("Profil Google tidak dapat diambil", frontend_redirect)
     except requests.RequestException as e:
-        logger.warning("OAuth session-data request failed: %s", e)
-        raise HTTPException(status_code=503, detail="Layanan login Google tidak dapat dihubungi")
-    if r.status_code != 200:
-        # A session_id is single-use; a replay after a successful exchange must not log
-        # the user out, so fall back to the credentials already on the request.
-        existing = await resolve_user(request)
-        if existing:
-            existing.pop("password_hash", None)
-            return {
-                "user_id": existing["user_id"], "email": existing["email"], "name": existing.get("name"),
-                "role": existing.get("role"), "picture": existing.get("picture", ""),
-            }
-        logger.warning("OAuth session-data rejected session_id (HTTP %s)", r.status_code)
-        raise HTTPException(status_code=401, detail="Sesi Google tidak valid")
-    data = r.json()
-    email = data["email"].strip().lower()
-    user = await db.users.find_one({"email": email}, {"_id": 0})
-    if not user:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        role = "owner" if email == os.environ.get("ADMIN_EMAIL", "").lower() else "applicant"
-        user = {"user_id": user_id, "email": email, "name": data.get("name", email), "role": role, "picture": data.get("picture", ""), "created_at": datetime.now(timezone.utc).isoformat()}
-        await db.users.insert_one(dict(user))
-    session_token = data["session_token"]
-    await db.user_sessions.update_one(
-        {"session_token": session_token},
-        {"$set": {
-            "user_id": user["user_id"],
-            "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
-        }, "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True,
-    )
-    set_auth_cookie(response, "session_token", session_token, request)
-    # `token` lets the SPA authenticate via Bearer when the browser blocks the cookie.
-    return {"user_id": user["user_id"], "email": email, "name": user.get("name"), "role": user.get("role"), "picture": user.get("picture", ""), "token": session_token}
+        logger.warning("Google OAuth request failed: %s", e)
+        return _fail("Layanan Google tidak dapat dihubungi", frontend_redirect)
+
+    user = await _upsert_google_user(profile.get("email", ""), profile.get("name", ""), profile.get("picture", ""))
+    token = create_access_token(user["user_id"], user["email"])
+    response = RedirectResponse(f"{frontend_redirect}#token={token}")
+    set_auth_cookie(response, "access_token", token, request)
+    return response
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
