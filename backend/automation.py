@@ -145,26 +145,38 @@ def _submit_nib_search(page, nib: str) -> None:
 
 
 def _extract_modal_fields(page) -> dict:
-    """Parse key/value rows inside Detail Data Pelaku Usaha modal."""
+    """
+    Parse key/value rows inside Detail Data Pelaku Usaha modal.
+
+    Modal DOM (oss.go.id):
+      div.max-w-lg...bg-white
+        h2: Detail Data Pelaku Usaha
+        div.space-y-3.rounded-md.bg-oss-gray-300.p-4
+          div.flex.justify-between.gap-4
+            span.font-bold  → label
+            span.truncate   → value
+        button: Tutup
+    """
     page.wait_for_selector("text=Detail Data Pelaku Usaha", timeout=30000, state="visible")
 
-    # Generic div.flex.justify-between.gap-4 also exists in page nav (lg:hidden).
-    # Modal rows always contain span.font-bold (label) + span.truncate (value).
+    # Prefer rows inside the gray modal body (avoids nav/layout false positives)
     rows = page.locator(
-        'div.flex.justify-between.gap-4:has(span.font-bold):has(span.truncate)'
+        'div.bg-oss-gray-300 div.flex.justify-between.gap-4:has(span.font-bold):has(span.truncate),'
+        'div.space-y-3.rounded-md div.flex.justify-between.gap-4:has(span.font-bold):has(span.truncate)'
     )
     try:
         rows.first.wait_for(state="visible", timeout=15000)
     except Exception:
-        # Fallback: parse via JS scoped to modal title ancestor
+        # Fallback: parse via JS scoped under the modal title
         raw = page.evaluate(
             """() => {
-              const title = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,div,span'))
+              const title = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,div,span,p'))
                 .find(el => (el.textContent || '').trim() === 'Detail Data Pelaku Usaha');
               if (!title) return {};
               let root = title.parentElement;
-              for (let i = 0; i < 8 && root; i++) {
-                const candidates = [...root.querySelectorAll('div.flex.justify-between.gap-4')]
+              for (let i = 0; i < 6 && root; i++) {
+                const box = root.querySelector('div.bg-oss-gray-300, div.space-y-3.rounded-md') || root;
+                const candidates = [...box.querySelectorAll('div.flex.justify-between.gap-4')]
                   .filter(row => row.querySelector('span.font-bold') && row.querySelector('span.truncate'));
                 if (candidates.length >= 2) {
                   const out = {};
