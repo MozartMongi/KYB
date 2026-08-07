@@ -168,7 +168,7 @@ export default function NewApplication() {
     setSubmitting(true);
     try {
       const id = await ensureApp();
-      toast.loading("Memverifikasi NPWP, rekening & NIB (OSS). Menunggu hasil OSS sebelum selesai…", { id: "sub" });
+      toast.loading("Memverifikasi NPWP, rekening & NIB (OSS). Proses verifikasi sekitar 1–2 Menit...", { id: "sub" });
       // Browserbase OSS scrape often needs 30–90s; default axios timeout (20s) aborts early
       // and surfaces as a generic error even when the backend later succeeds.
       await api.post(`/applications/${id}/submit`, null, { timeout: 180000 });
