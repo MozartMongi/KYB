@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, formatApiErrorDetail, formatAxiosError, rp } from "@/lib/api";
@@ -36,7 +37,7 @@ const addressValid = (address) => {
 /** Mandatory fields per step — Lanjut stays disabled until these are complete. */
 function stepComplete(step, c) {
   if (step === 1) {
-    return filled(c.legal_name) && filled(c.npwp) && addressValid(c.address);
+    return filled(c.legal_name) && filled(c.nib) && filled(c.npwp) && addressValid(c.address);
   }
   if (step === 2) {
     return c.directors.length > 0 && c.directors.every((d) => filled(d.name));
@@ -155,6 +156,10 @@ export default function NewApplication() {
   };
 
   const submit = async () => {
+    if (!filled(c.nib)) {
+      toast.error("NIB wajib diisi");
+      return;
+    }
     if (!addressValid(c.address)) {
       toast.error(`Alamat terdaftar harus ${ADDRESS_MIN}–${ADDRESS_MAX} karakter`);
       return;
@@ -181,15 +186,23 @@ export default function NewApplication() {
     }
   };
 
-  return (
-    <div className="animate-fade-up">
-      {submitting && (
+  // Portal to body: parent `.animate-fade-up` keeps a transform, which would otherwise
+  // confine position:fixed to the main pane (sidebar + page bottom stay clickable).
+  const submitBackdrop = submitting
+    ? createPortal(
         <div
           data-testid="submit-backdrop"
           className="fixed inset-0 z-[100] bg-black/40"
           aria-hidden="true"
-        />
-      )}
+          onClick={(e) => e.stopPropagation()}
+        />,
+        document.body,
+      )
+    : null;
+
+  return (
+    <div className="animate-fade-up">
+      {submitBackdrop}
       <header className="bg-white border-b border-gray-200 px-8 py-5">
         <h1 className="font-head font-extrabold text-2xl tracking-tight">Onboarding Nasabah Perusahaan</h1>
         <p className="text-sm text-gray-500">Verifikasi KYB berstandar perbankan dengan credit scoring</p>
@@ -233,7 +246,7 @@ export default function NewApplication() {
                   <SelectContent>{INDUSTRIES.map((x) => <SelectItem key={x} value={x}>{x.replace(/_/g, " ")}</SelectItem>)}</SelectContent>
                 </Select>
               </Field>
-              <Field label="NIB"><Input data-testid="nib-input" value={c.nib} onChange={upd("nib")} className="rounded-sm font-mono" placeholder="13 digit" /></Field>
+              <Field label="NIB *"><Input data-testid="nib-input" value={c.nib} onChange={upd("nib")} className="rounded-sm font-mono" placeholder="13 digit" required /></Field>
               <Field label="NPWP *"><Input data-testid="npwp-input" value={c.npwp} onChange={upd("npwp")} className="rounded-sm font-mono" placeholder="15–16 digit" /></Field>
               <Field label="No. Akta Pendirian"><Input value={c.deed_number} onChange={upd("deed_number")} className="rounded-sm font-mono" /></Field>
               <Field label="Tahun Berdiri"><Input type="number" value={c.established_year} onChange={upd("established_year")} className="rounded-sm font-mono" placeholder="2019" /></Field>
