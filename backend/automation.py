@@ -125,11 +125,67 @@ def _dismiss_announcements(page) -> None:
 
 
 def _submit_nib_search(page, nib: str) -> None:
-    """Fill NIB and trigger search on oss.go.id footer form."""
-    search = page.locator('input[placeholder="Cari NIB"]')
-    search.wait_for(state="visible", timeout=20000)
-    search.scroll_into_view_if_needed()
-    page.wait_for_timeout(300)
+    """Fill NIB and trigger search on oss.go.id footer form (Pencarian NIB)."""
+    # Overlay / late-loading SPA can hide the footer input — clear & scroll first
+    if _overlay_blocks_page(page):
+        _remove_announcement_overlay(page)
+    try:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    except Exception:
+        pass
+    page.wait_for_timeout(800)
+
+    # Footer form: input maxlength=13 placeholder Cari NIB (near heading Pencarian NIB)
+    candidates = [
+        'input[placeholder="Cari NIB"]',
+        'input[placeholder*="Cari NIB" i]',
+        'input[maxlength="13"][inputmode="numeric"]',
+        'input[pattern="[0-9]*"][placeholder*="NIB" i]',
+    ]
+    search = None
+    last_err = None
+    for sel in candidates:
+        loc = page.locator(sel).last  # footer sits near end of DOM
+        try:
+            loc.wait_for(state="attached", timeout=8000)
+            loc.scroll_into_view_if_needed()
+            loc.wait_for(state="visible", timeout=10000)
+            search = loc
+            break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if search is None:
+        # Last attempt: find via heading "Pencarian NIB"
+        try:
+            heading = page.get_by_role("heading", name="Pencarian NIB")
+            heading.scroll_into_view_if_needed()
+            search = page.locator('input[placeholder*="NIB" i]').last
+            search.wait_for(state="visible", timeout=10000)
+        except Exception:
+            diag = {}
+            try:
+                diag = page.evaluate(
+                    """() => {
+                      const inputs = Array.from(document.querySelectorAll('input'));
+                      return {
+                        url: location.href,
+                        title: document.title,
+                        hasOverlay: Array.from(document.querySelectorAll('div.fixed'))
+                          .some(el => (el.className || '').includes('z-[9999]')),
+                        inputCount: inputs.length,
+                        cariNibCount: inputs.filter(el =>
+                          (el.getAttribute('placeholder') || '').toLowerCase().includes('cari nib')
+                        ).length,
+                      };
+                    }"""
+                )
+            except Exception:
+                pass
+            raise TimeoutError(
+                f"Input Cari NIB tidak ditemukan. diag={diag}"
+            ) from last_err
 
     if _overlay_blocks_page(page):
         _remove_announcement_overlay(page)
@@ -138,8 +194,8 @@ def _submit_nib_search(page, nib: str) -> None:
     search.fill(nib, force=True)
 
     btn = page.get_by_role("button", name="Cari NIB")
-    if btn.count() and btn.first.is_visible():
-        btn.first.click(force=True)
+    if btn.count() and btn.last.is_visible():
+        btn.last.click(force=True)
     else:
         search.press("Enter")
 
@@ -251,8 +307,15 @@ def run_oss_nib_lookup(nib: str) -> dict:
 
         try:
             page.goto(OSS_URL, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(1200)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            page.wait_for_timeout(1500)
             _dismiss_announcements(page)
+            # Ensure announcement overlay is gone before footer search
+            if _overlay_blocks_page(page):
+                _remove_announcement_overlay(page)
             _submit_nib_search(page, nib)
             page.wait_for_timeout(800)
 
