@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, formatApiErrorDetail, rp } from "@/lib/api";
+import { api, formatApiErrorDetail, formatAxiosError, rp } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -164,7 +164,9 @@ export default function NewApplication() {
     try {
       const id = await ensureApp();
       toast.loading("Memverifikasi NPWP, rekening & NIB (OSS). Menunggu hasil OSS sebelum selesai…", { id: "sub" });
-      await api.post(`/applications/${id}/submit`);
+      // Browserbase OSS scrape often needs 30–90s; default axios timeout (20s) aborts early
+      // and surfaces as a generic error even when the backend later succeeds.
+      await api.post(`/applications/${id}/submit`, null, { timeout: 180000 });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: APPLICATIONS_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: DASHBOARD_STATS_QUERY_KEY }),
@@ -172,7 +174,7 @@ export default function NewApplication() {
       toast.success("Aplikasi dikirim. Hasil verifikasi (termasuk NIB OSS) siap ditinjau.", { id: "sub" });
       navigate(`/applications/${id}`);
     } catch (e) {
-      toast.error(formatApiErrorDetail(e.response?.data?.detail), { id: "sub" });
+      toast.error(formatAxiosError(e), { id: "sub" });
     } finally {
       setBusy(false);
       setSubmitting(false);
