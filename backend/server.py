@@ -738,56 +738,82 @@ def verify_npwp(company: dict) -> dict:
         result["message"] = "api.co.id belum dikonfigurasi (BASE_URL_API_CO_ID / API_CO_ID_KEY)"
         return result
 
-    try:
-        r = requests.post(
-            url,
-            json={"npwp": npwp, "name": name, "address": address},
-            headers=_api_co_id_headers(),
-            timeout=30,
-        )
-        result["http_status"] = r.status_code
+    # api.co.id occasionally returns 502/503/504 under load — retry briefly before giving up
+    max_attempts = 3
+    payload = {"npwp": npwp, "name": name, "address": address}
+    last_err = None
+
+    for attempt in range(1, max_attempts + 1):
         try:
-            body = r.json()
-        except Exception:
-            body = {}
+            r = requests.post(
+                url,
+                json=payload,
+                headers=_api_co_id_headers(),
+                timeout=45,
+            )
+            result["http_status"] = r.status_code
+            try:
+                body = r.json()
+            except Exception:
+                body = {}
 
-        if isinstance(body, dict):
-            result["data"] = body.get("data")
-            result["detail"] = _npwp_inner_detail(result["data"])
-            result["message"] = (body.get("message") or "").strip()
-            if not result["message"] and isinstance(result["data"], dict):
-                result["message"] = (result["data"].get("message") or "").strip()
-            result["is_success"] = _npwp_response_success(body, r.status_code, result["detail"])
-        else:
-            result["message"] = "Respons provider tidak valid"
-            result["is_success"] = False
+            if isinstance(body, dict):
+                result["data"] = body.get("data")
+                result["detail"] = _npwp_inner_detail(result["data"])
+                result["message"] = (body.get("message") or "").strip()
+                if not result["message"] and isinstance(result["data"], dict):
+                    result["message"] = (result["data"].get("message") or "").strip()
+                result["is_success"] = _npwp_response_success(body, r.status_code, result["detail"])
+            else:
+                result["message"] = "Respons provider tidak valid"
+                result["is_success"] = False
 
-        if r.status_code >= 400:
-            result["is_success"] = False
-            if not result["message"]:
-                err_map = {
-                    400: "JSON body tidak valid",
-                    401: "API key hilang atau salah",
-                    402: "Saldo/subscription belum cukup",
-                    403: "eKYC belum approved",
-                    404: "NPWP/NIK tidak ditemukan",
-                    422: "Format npwp, name, atau address tidak valid",
-                    502: "Provider auth/server error",
-                    503: "Provider unavailable",
-                    504: "Provider timeout",
-                }
-                result["message"] = err_map.get(r.status_code, f"Verifikasi gagal (HTTP {r.status_code})")
-        logger.info(
-            "NPWP verify done http=%s success=%s has_detail=%s",
-            r.status_code, result["is_success"], bool(result["detail"]),
-        )
-    except requests.Timeout:
-        logger.error("NPWP verify timed out")
-        result["message"] = "Timeout saat menghubungi provider NPWP"
-    except Exception as e:
-        logger.error(f"NPWP verify failed: {type(e).__name__}")
+            if r.status_code in (502, 503, 504) and attempt < max_attempts:
+                logger.warning(
+                    "NPWP verify transient http=%s attempt=%s/%s — retrying",
+                    r.status_code, attempt, max_attempts,
+                )
+                time.sleep(1.5 * attempt)
+                continue
+
+            if r.status_code >= 400:
+                result["is_success"] = False
+                if not result["message"]:
+                    err_map = {
+                        400: "JSON body tidak valid",
+                        401: "API key hilang atau salah",
+                        402: "Saldo/subscription belum cukup",
+                        403: "eKYC belum approved",
+                        404: "NPWP/NIK tidak ditemukan",
+                        422: "Format npwp, name, atau address tidak valid",
+                        502: "Provider auth/server error",
+                        503: "Provider unavailable",
+                        504: "Provider timeout",
+                    }
+                    result["message"] = err_map.get(r.status_code, f"Verifikasi gagal (HTTP {r.status_code})")
+
+            logger.info(
+                "NPWP verify done http=%s success=%s has_detail=%s attempts=%s",
+                r.status_code, result["is_success"], bool(result["detail"]), attempt,
+            )
+            return result
+
+        except requests.Timeout as e:
+            last_err = e
+            logger.warning("NPWP verify timed out attempt=%s/%s", attempt, max_attempts)
+            if attempt < max_attempts:
+                time.sleep(1.5 * attempt)
+                continue
+            result["message"] = "Timeout saat menghubungi provider NPWP"
+            result["http_status"] = 504
+        except Exception as e:
+            last_err = e
+            logger.error(f"NPWP verify failed: {type(e).__name__}")
+            result["message"] = "Gagal menghubungi layanan verifikasi NPWP"
+            break
+
+    if last_err and not result["message"]:
         result["message"] = "Gagal menghubungi layanan verifikasi NPWP"
-
     return result
 
 # ---------------- Didit KYC/KYB (hosted sessions) ----------------
@@ -1549,8 +1575,14 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
     if a.get("status") in ("auto_rejected", "approved", "rejected"):
         raise HTTPException(status_code=400, detail="Aplikasi sudah difinalisasi dan tidak dapat dikirim ulang")
     company = a["company"]
-    # Browserbase OSS lookup runs to completion before submit returns, so
-    # ApplicationDetail always has registry done/failed (never still queued).
+    # Run bank + NPWP first (fast API calls). Browserbase OSS can take 30–60s and
+    # previously starved remaining function time / made NPWP more likely to hit
+    # provider 504 when called afterward.
+    bank_val, npwp_val = await asyncio.gather(
+        asyncio.to_thread(verify_bank, company),
+        asyncio.to_thread(verify_npwp, company),
+    )
+
     use_bb = _browserbase_ready()
     if use_bb:
         nib_val = await asyncio.to_thread(
@@ -1558,8 +1590,7 @@ async def submit_application(app_id: str, user: dict = Depends(get_current_user)
         )
     else:
         nib_val = validate_nib(company, a.get("nib_qr"), use_browserbase=False)
-    bank_val = verify_bank(company)
-    npwp_val = verify_npwp(company)
+
     hits = screen_watchlist(company)
     rule = compute_rule_score(company, hits)
     ai = await ai_risk_review(company, rule, hits)
