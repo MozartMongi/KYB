@@ -537,7 +537,7 @@ export default function Landing() {
               <li>
                 <a href="mailto:corporate@corpscore.tech" className="hover:text-white">corporate@corpscore.tech</a>
               </li>
-              <li>Indonesia</li>
+              <li>Persada Office Park, Lt 5, Jl. KH. Noer Ali No.3A, Kel. Kayuringinjaya, Kec. Bekasi Selatan, Kota Bekasi, Jawa Barat 17144</li>
             </ul>
           </div>
         </div>
