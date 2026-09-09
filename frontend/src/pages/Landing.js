@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import HeroParticles from "@/components/HeroParticles";
 import { HOME } from "@/constants/testIds";
 import {
   Accordion,
@@ -224,7 +225,8 @@ export default function Landing() {
 
       {/* Hero — marketing-strategy split layout */}
       <section id="beranda" className="relative overflow-hidden scroll-mt-28">
-        <div className="max-w-6xl mx-auto px-5 pt-16 pb-20 lg:pt-24 lg:pb-28 grid lg:grid-cols-12 gap-10 items-center">
+        <HeroParticles />
+        <div className="relative z-10 max-w-6xl mx-auto px-5 pt-16 pb-20 lg:pt-24 lg:pb-28 grid lg:grid-cols-12 gap-10 items-center">
           <div className="lg:col-span-7 relative z-10">
             <h1 className="font-head font-extrabold text-4xl sm:text-5xl lg:text-[3.4rem] leading-[1.08] tracking-tight text-[#0A0A0A]">
               Kami mengamankan onboarding bisnis untuk exchange Anda.
