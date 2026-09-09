@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, formatAxiosError, API } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -46,12 +46,12 @@ export default function Login() {
           src="https://images.unsplash.com/photo-1750969185331-e03829f72c7d?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200"
           alt="" className="absolute inset-0 w-full h-full object-cover opacity-25"
         />
-        <div className="relative flex items-center gap-2.5">
+        <Link to="/" className="relative flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-sm bg-blue-600 flex items-center justify-center">
             <ShieldCheck className="w-5 h-5" />
           </div>
           <span className="font-head font-extrabold text-lg tracking-tight">CorpScore</span>
-        </div>
+        </Link>
         <div className="relative">
           <h1 className="font-head font-extrabold text-4xl leading-tight tracking-tight">
             KYB & Credit Scoring<br />untuk Crypto Exchange Indonesia
@@ -66,12 +66,18 @@ export default function Login() {
             <div><div className="text-2xl font-semibold text-blue-400">PPATK</div><div className="text-gray-400 text-xs">Aligned</div></div>
           </div>
         </div>
-        <div className="relative text-xs text-gray-500 font-mono">© 2026 CorpScore RegTech</div>
+        <div className="relative text-xs text-gray-500 font-mono">© 2026 CorpScore</div>
       </div>
 
       {/* Right form */}
       <div className="flex items-center justify-center p-6 lg:p-12 bg-white">
         <div className="w-full max-w-sm animate-fade-up">
+          <Link to="/" className="lg:hidden flex items-center gap-2.5 mb-8 text-[#0A0A0A]">
+            <div className="w-8 h-8 rounded-sm bg-blue-600 flex items-center justify-center text-white">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <span className="font-head font-extrabold tracking-tight">CorpScore</span>
+          </Link>
           <h2 className="font-head font-extrabold text-2xl tracking-tight">
             {mode === "login" ? "Masuk ke konsol" : "Buat akun"}
           </h2>
