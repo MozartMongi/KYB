@@ -172,7 +172,7 @@ export default function Landing() {
       <div className="bg-[#2663ec] text-xs">
         <div className="max-w-6xl mx-auto px-5 py-2.5 flex items-center justify-between gap-4">
           <p className="text-gray-300 truncate">
-            KYB & credit scoring untuk crypto exchange Indonesia — standar onboarding perbankan.
+            KYB & risk management score untuk crypto exchange Indonesia — standar onboarding perbankan.
           </p>
           <a href="mailto:corporate@corpscore.tech" className="hidden sm:inline-flex items-center gap-1.5 text-gray-400 hover:text-white shrink-0">
             <Mail className="w-3.5 h-3.5" /> corporate@corpscore.tech
@@ -238,7 +238,7 @@ export default function Landing() {
                 className="w-12 h-12 rounded-sm object-contain shrink-0"
               />
               <div>
-                <div className="font-head font-extrabold text-lg leading-tight">Faktor skor kredit</div>
+                <div className="font-head font-extrabold text-lg leading-tight">Faktor Skor Manajemen Risiko</div>
                 <div className="text-xs text-gray-500">Legalitas · Keuangan · AML · Industri</div>
               </div>
             </div>
@@ -512,7 +512,7 @@ export default function Landing() {
           <div className="lg:col-span-1">
             <BrandMark light />
             <p className="mt-4 text-sm text-gray-400 leading-relaxed">
-              KYB & credit scoring untuk crypto exchange Indonesia.
+              KYB & risk management score untuk crypto exchange Indonesia.
             </p>
           </div>
           <div>
