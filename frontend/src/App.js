@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { Toaster } from "sonner";
 import AuthCallback from "@/pages/AuthCallback";
 import Login from "@/pages/Login";
+import Landing from "@/pages/Landing";
 import Dashboard from "@/pages/Dashboard";
 import NewApplication from "@/pages/NewApplication";
 import ApplicationDetail from "@/pages/ApplicationDetail";
@@ -37,6 +38,7 @@ function AppRouter() {
   return (
     <Routes>
       <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/" element={<Landing />} />
       <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
       <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
       <Route path="/applications/new" element={<Protected><NewApplication /></Protected>} />
