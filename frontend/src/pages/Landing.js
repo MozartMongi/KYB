@@ -135,7 +135,7 @@ function BrandMark({ light = false }) {
           CorpScore
         </div>
         <div className={`text-[10px] tracking-widest ${light ? "text-gray-400" : "text-gray-500"}`}>
-          KYB & Credit Scoring
+          KYB & Risk Management Score
         </div>
       </div>
     </Link>
