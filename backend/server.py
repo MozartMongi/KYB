@@ -991,7 +991,7 @@ def generate_report_pdf(a: dict) -> bytes:
         canvas.drawString(25 * mm, hgt - 15 * mm, "CorpScore")
         canvas.setFillColor(colors.HexColor("#9CA3AF"))
         canvas.setFont("Helvetica", 8)
-        canvas.drawString(25 * mm, hgt - 20 * mm, "KYB & Credit Scoring Console — Laporan Risiko Compliance")
+        canvas.drawString(25 * mm, hgt - 20 * mm, "KYB & Risk Management Score Console — Laporan Risiko Compliance")
         canvas.setFillColor(colors.HexColor("#60A5FA"))
         canvas.setFont("Helvetica-Bold", 7)
         canvas.drawRightString(w - 16 * mm, hgt - 15 * mm, "RAHASIA / CONFIDENTIAL")
