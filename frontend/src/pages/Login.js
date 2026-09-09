@@ -54,7 +54,7 @@ export default function Login() {
         </Link>
         <div className="relative">
           <h1 className="font-head font-extrabold text-4xl leading-tight tracking-tight">
-            KYB & Credit Scoring<br />untuk Crypto Exchange Indonesia
+            KYB & Risk Management Score<br />untuk Crypto Exchange Indonesia
           </h1>
           <p className="mt-4 text-gray-300 max-w-md">
             Onboarding nasabah perusahaan & prioritas dengan standar perbankan — verifikasi dokumen berbasis AI,
