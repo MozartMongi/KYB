@@ -249,17 +249,46 @@ export default function Landing() {
               Onboarding nasabah perusahaan & prioritas dengan standar perbankan — verifikasi dokumen berbasis AI,
               screening PEP/sanksi, dan penilaian risiko kredit yang transparan.
             </p>
-            <Link
-              to="/login"
-              data-testid={HOME.heroCta}
-              className="mt-7 inline-flex items-center gap-2 rounded-sm bg-[#0A0A0A] hover:bg-gray-800 text-white px-5 py-3 text-sm font-medium transition-colors duration-200"
-            >
-              Masuk ke konsol <ArrowRight className="w-4 h-4" />
-            </Link>
-            <span className="landing-contact-cta relative inline-flex items-center gap-2 overflow-hidden rounded-sm bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors duration-200 hover:bg-blue-700">
-              <Mail className="w-4 h-4" />
-              Hubungi Tim Kami
-            </span>
+            <div className="mt-7 flex flex-wrap items-center gap-x-4 gap-y-3">
+              <Link
+                to="/login"
+                data-testid={HOME.heroCta}
+                className="inline-flex items-center gap-2 rounded-sm bg-[#0A0A0A] hover:bg-gray-800 text-white px-5 py-3 text-sm font-medium transition-colors duration-200"
+              >
+                Masuk ke konsol <ArrowRight className="w-4 h-4" />
+              </Link>
+              <a
+                href="mailto:corporate@corpscore.tech"
+                data-testid={HOME.heroContactCta}
+                className="landing-hero-contact relative inline-flex"
+              >
+                <span className="pointer-events-none absolute -inset-[3px] overflow-hidden rounded-sm" aria-hidden="true">
+                  <span
+                    className="landing-hero-contact-halo absolute inset-[-50%]"
+                    style={{
+                      background:
+                        "conic-gradient(from 0deg, rgba(37,99,235,0) 0deg, rgba(37,99,235,0.95) 70deg, rgba(37,99,235,0) 150deg)",
+                    }}
+                  />
+                </span>
+                <span
+                  className="landing-hero-contact-ring pointer-events-none absolute -inset-1 rounded-sm border border-blue-500/70"
+                  aria-hidden="true"
+                />
+                <span
+                  className="landing-hero-contact-ring pointer-events-none absolute -inset-1 rounded-sm border border-blue-400/50 [animation-delay:0.6s]"
+                  aria-hidden="true"
+                />
+                <span
+                  className="landing-hero-contact-ring pointer-events-none absolute -inset-1 rounded-sm border border-blue-600/40 [animation-delay:1.2s]"
+                  aria-hidden="true"
+                />
+                <span className="landing-hero-contact-cta relative z-10 inline-flex items-center gap-2 overflow-hidden rounded-sm bg-blue-600 px-5 py-3 text-sm font-medium text-white transition-colors duration-200 hover:bg-blue-700">
+                  <Mail className="w-4 h-4" />
+                  Hubungi Tim Kami
+                </span>
+              </a>
+            </div>
           </div>
         </div>
 
