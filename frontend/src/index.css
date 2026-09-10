@@ -114,7 +114,51 @@ body {
     pointer-events: none;
 }
 
+@keyframes landing-hero-contact-glow {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0), 0 4px 14px rgba(37, 99, 235, 0.28);
+    }
+    50% {
+        box-shadow: 0 0 0 10px rgba(37, 99, 235, 0), 0 8px 26px rgba(37, 99, 235, 0.55);
+    }
+}
+.landing-hero-contact {
+    animation: landing-hero-contact-glow 1.7s ease-in-out infinite;
+}
+
+@keyframes landing-hero-contact-ring {
+    0% { transform: scale(0.9); opacity: 0.35; }
+    40% { opacity: 0.95; }
+    100% { transform: scale(1.34); opacity: 0; }
+}
+.landing-hero-contact-ring {
+    animation-name: landing-hero-contact-ring;
+    animation-duration: 1.8s;
+    animation-timing-function: ease-out;
+    animation-iteration-count: infinite;
+}
+
+.landing-hero-contact-halo {
+    animation: landing-sweep 2.2s linear infinite;
+}
+
+@keyframes landing-hero-contact-sheen {
+    0% { transform: translateX(-140%) skewX(-16deg); }
+    38%, 100% { transform: translateX(260%) skewX(-16deg); }
+}
+.landing-hero-contact-cta::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 55%;
+    background: linear-gradient(105deg, transparent 8%, rgba(255, 255, 255, 0.48) 50%, transparent 92%);
+    animation: landing-hero-contact-sheen 1.8s ease-in-out infinite;
+    pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .landing-marquee, .landing-radiate, .landing-sweep, .landing-breathe,
-    .landing-contact-ring, .landing-contact-cta::after { animation: none; }
+    .landing-contact-ring, .landing-contact-cta::after,
+    .landing-hero-contact, .landing-hero-contact-ring, .landing-hero-contact-halo,
+    .landing-hero-contact-cta::after { animation: none; }
 }
