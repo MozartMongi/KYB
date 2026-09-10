@@ -388,9 +388,29 @@ export default function Landing() {
                   </div>
                   <div className="lg:col-span-7">
                     <p className="text-gray-600 leading-relaxed max-w-xl">{s.body}</p>
-                    <Link to="/login" className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700">
-                      Mulai di konsol <ArrowRight className="w-4 h-4" />
-                    </Link>
+                    <div className="mt-4 flex flex-col items-start gap-3">
+                      <Link to="/login" className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700">
+                        Mulai di konsol <ArrowRight className="w-4 h-4" />
+                      </Link>
+                      <a
+                        href="mailto:corporate@corpscore.tech"
+                        data-testid={HOME.contactCta}
+                        className="relative inline-flex"
+                      >
+                        <span
+                          className="landing-contact-ring pointer-events-none absolute -inset-1 rounded-sm border border-blue-500/60"
+                          aria-hidden="true"
+                        />
+                        <span
+                          className="landing-contact-ring pointer-events-none absolute -inset-1 rounded-sm border border-blue-400/40 [animation-delay:1.3s]"
+                          aria-hidden="true"
+                        />
+                        <span className="landing-contact-cta relative inline-flex items-center gap-2 overflow-hidden rounded-sm bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors duration-200 hover:bg-blue-700">
+                          <Mail className="w-4 h-4" />
+                          Hubungi Tim Kami
+                        </span>
+                      </a>
+                    </div>
                   </div>
                 </div>
               );
