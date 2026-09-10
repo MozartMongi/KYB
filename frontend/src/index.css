@@ -88,6 +88,33 @@ body {
 }
 .landing-breathe { animation: landing-breathe 3.6s ease-in-out infinite; }
 
+@keyframes landing-contact-ring {
+    0% { transform: scale(0.96); opacity: 0.12; }
+    50% { opacity: 0.7; }
+    100% { transform: scale(1.14); opacity: 0; }
+}
+.landing-contact-ring {
+    animation-name: landing-contact-ring;
+    animation-duration: 2.6s;
+    animation-timing-function: ease-out;
+    animation-iteration-count: infinite;
+}
+
+@keyframes landing-contact-sheen {
+    0% { transform: translateX(-130%); }
+    45%, 100% { transform: translateX(230%); }
+}
+.landing-contact-cta::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 45%;
+    background: linear-gradient(105deg, transparent 20%, rgba(255, 255, 255, 0.28) 50%, transparent 80%);
+    animation: landing-contact-sheen 2.8s ease-in-out infinite;
+    pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-    .landing-marquee, .landing-radiate, .landing-sweep, .landing-breathe { animation: none; }
+    .landing-marquee, .landing-radiate, .landing-sweep, .landing-breathe,
+    .landing-contact-ring, .landing-contact-cta::after { animation: none; }
 }
