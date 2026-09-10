@@ -8,5 +8,6 @@ export const HOME = {
 	loginButton: 'home-login-button',
 	menuButton: 'home-menu-button',
 	heroCta: 'home-hero-cta',
+	contactCta: 'home-contact-cta',
 	faqItem: 'home-faq-item',
 };
