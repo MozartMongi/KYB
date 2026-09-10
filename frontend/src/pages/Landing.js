@@ -256,6 +256,10 @@ export default function Landing() {
             >
               Masuk ke konsol <ArrowRight className="w-4 h-4" />
             </Link>
+            <span className="landing-contact-cta relative inline-flex items-center gap-2 overflow-hidden rounded-sm bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors duration-200 hover:bg-blue-700">
+              <Mail className="w-4 h-4" />
+              Hubungi Tim Kami
+            </span>
           </div>
         </div>
 
